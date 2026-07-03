@@ -248,7 +248,7 @@ def run(state: AgentState) -> dict[str, Any]:
         }
 
     # --- 2. テスト計画立案 ---
-    structured_llm = llm.with_structured_output(TestPlan)
+    structured_llm = llm.with_structured_output(TestPlan, method="function_calling")
     plan: TestPlan = structured_llm.invoke(_build_test_plan_messages(state))
 
     # --- 3. テストベッド取得 ---
@@ -266,7 +266,7 @@ def run(state: AgentState) -> dict[str, Any]:
     error_log = ""
 
     if failed:
-        analysis_llm = llm.with_structured_output(FailureAnalysis)
+        analysis_llm = llm.with_structured_output(FailureAnalysis, method="function_calling")
         analysis: FailureAnalysis = analysis_llm.invoke(
             _build_analysis_messages(state, failed)
         )

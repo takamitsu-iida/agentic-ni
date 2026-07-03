@@ -111,8 +111,8 @@ def run(state: AgentState) -> dict[str, Any]:
     """
     llm = get_llm()
 
-    # 構造化出力モード
-    structured_llm = llm.with_structured_output(DesignOutput)
+    # 構造化出力モード（function_calling: dict[str, str] など strict 非対応型を含むため）
+    structured_llm = llm.with_structured_output(DesignOutput, method="function_calling")
 
     messages = _build_messages(state)
     result: DesignOutput = structured_llm.invoke(messages)
