@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 import warnings
@@ -30,6 +31,9 @@ def _get_client():
         EnvironmentError: 必須環境変数が未設定の場合
         virl2_client.InitializationError: CMLへの接続に失敗した場合
     """
+
+    # SSL Verification disabled のログが鬱陶しいので、ERRORのみに抑制
+    logging.getLogger("virl2_client.virl2_client").setLevel(logging.ERROR)
     from virl2_client import ClientLibrary
 
     url = os.getenv("CML_URL")

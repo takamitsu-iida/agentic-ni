@@ -667,17 +667,11 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 
 **完了条件**: 最終レポート（成功またはエスカレーション）が出力される。
 
-
 ```
 iida@s400win:~/git/agentic-ni$ agentic-ni
-SSL Verification disabled
-SSL Verification disabled
-SSL Verification disabled
-SSL Verification disabled
-SSL Verification disabled
 # エスカレーションレポート
 
-**生成日時**: 2026-07-03 17:58:23
+**生成日時**: 2026-07-03 18:02:23
 
 ## 要件
 R1とR2をOSPFで接続する
@@ -699,6 +693,7 @@ R1とR2をOSPFで接続する
 1. 要件の曖昧さや矛盾がないか確認する
 2. 最終エラーログを参考に手動でコンフィグを修正する
 3. CMLラボID `` で現状を確認する
+iida@s400win:~/git/agentic-ni$
 ```
 
 ---
