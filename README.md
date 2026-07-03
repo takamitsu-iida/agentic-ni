@@ -667,6 +667,131 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 
 **完了条件**: 最終レポート（成功またはエスカレーション）が出力される。
 
+```text
+iida@s400win:~/git/agentic-ni$ agentic-ni
+/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_openai/chat_models/base.py:550: UserWarning: Invalid schema for OpenAI's structured output feature, which is the default method for `with_structured_output` as of langchain-openai==0.3. Specify `method="function_calling"` instead or update your schema. See supported schemas: https://platform.openai.com/docs/guides/structured-outputs#supported-schemas
+  warnings.warn(message)
+Traceback (most recent call last):
+  File "/home/iida/git/agentic-ni/.venv/bin/agentic-ni", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/iida/git/agentic-ni/src/agentic_ni/graph.py", line 259, in main
+    result = app.invoke(initial_state(requirement))
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py", line 3928, in invoke
+    for chunk in self.stream(
+                 ~~~~~~~~~~~^
+        input,
+        ^^^^^^
+    ...<11 lines>...
+        **kwargs,
+        ^^^^^^^^^
+    ):
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py", line 2982, in stream
+    for _ in runner.tick(
+             ~~~~~~~~~~~^
+        [t for t in loop.tasks.values() if not t.writes],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        schedule_task=loop.accept_push,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py", line 207, in tick
+    run_with_retry(
+    ~~~~~~~~~~~~~~^
+        t,
+        ^^
+    ...<10 lines>...
+        },
+        ^^
+    )
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py", line 617, in run_with_retry
+    return task.proc.invoke(task.input, config)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py", line 684, in invoke
+    input = context.run(step.invoke, input, config, **kwargs)
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py", line 426, in invoke
+    ret = self.func(*args, **kwargs)
+  File "/home/iida/git/agentic-ni/src/agentic_ni/graph.py", line 31, in architect_node
+    return architect.run(state)
+           ~~~~~~~~~~~~~^^^^^^^
+  File "/home/iida/git/agentic-ni/src/agentic_ni/agents/architect.py", line 118, in run
+    result: DesignOutput = structured_llm.invoke(messages)
+                           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 3442, in invoke
+    input_ = context.run(step.invoke, input_, config, **kwargs)
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 6004, in invoke
+    return self.bound.invoke(
+           ~~~~~~~~~~~~~~~~~^
+        input,
+        ^^^^^^
+        self._merge_configs(config),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        **{**self.kwargs, **kwargs},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py", line 476, in invoke
+    self.generate_prompt(
+    ~~~~~~~~~~~~~~~~~~~~^
+        [self._convert_input(input)],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        **kwargs,
+        ^^^^^^^^^
+    ).generations[0][0],
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py", line 1849, in generate_prompt
+    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py", line 1656, in generate
+    self._generate_with_cache(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        m,
+        ^^
+    ...<2 lines>...
+        **kwargs,
+        ^^^^^^^^^
+    )
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py", line 1994, in _generate_with_cache
+    result = self._generate(
+        messages, stop=stop, run_manager=run_manager, **kwargs
+    )
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_openai/chat_models/base.py", line 1690, in _generate
+    _handle_openai_bad_request(e)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_openai/chat_models/base.py", line 551, in _handle_openai_bad_request
+    raise e
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_openai/chat_models/base.py", line 1664, in _generate
+    self.root_client.chat.completions.with_raw_response.parse(**payload)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/openai/_legacy_response.py", line 367, in wrapped
+    return cast(LegacyAPIResponse[R], func(*args, **kwargs))
+                                      ~~~~^^^^^^^^^^^^^^^^^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/openai/resources/chat/completions/completions.py", line 192, in parse
+    return self._post(
+           ~~~~~~~~~~^
+        "/chat/completions",
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<52 lines>...
+        stream=False,
+        ^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/openai/_base_client.py", line 1332, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/openai/_base_client.py", line 1105, in request
+    raise self._make_status_error_from_response(err.response) from None
+openai.BadRequestError: Error code: 400 - {'error': {'message': "Invalid schema for response_format 'DesignOutput': In context=(), 'required' is required to be supplied and to be an array including every key in properties. Extra required key 'device_configs' supplied.", 'type': 'invalid_request_error', 'param': 'response_format', 'code': None}}
+During task with name 'architect' and id 'cc9cfb4e-ef1e-ec98-6d43-d96978310878'
+iida@s400win:~/git/agentic-ni$
+```
+
+
 ---
 
 ### トラブルシューティング
