@@ -642,6 +642,8 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 
 2. CLI から直接実行する（実 CML・実 LLM API が必要）。
 
+   注意：このテストは長い時間かかります。
+
    ```bash
    agentic-ni
    ```
@@ -668,10 +670,10 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 **完了条件**: 最終レポート（成功またはエスカレーション）が出力される。
 
 ```
-iida@s400win:~/git/agentic-ni$ agentic-ni
+ida@s400win:~/git/agentic-ni$ agentic-ni
 # エスカレーションレポート
 
-**生成日時**: 2026-07-03 18:02:23
+**生成日時**: 2026-07-03 18:13:11
 
 ## 要件
 R1とR2をOSPFで接続する
@@ -686,7 +688,7 @@ R1とR2をOSPFで接続する
 | (テスト未実施) | - | - |
 
 ## 最終エラーログ（AIの推論）
-デプロイ失敗: ConnectError: [Errno 113] No route to host
+デプロイ失敗: APIError: Client error - {"Input validation failed": [{"location": ["body", "links", 0, "label"], "type": "string_too_short", "message": "String should have at least 1 character"}, {"location": ["body", "lab", "version"], "type": "missing", "message": "Field required"}]}
 
 ## 推奨アクション
 自動修正の上限（5回）に達しました。以下を手動で確認してください:
