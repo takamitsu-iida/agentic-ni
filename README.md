@@ -612,8 +612,8 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 2. インストールの確認。
 
    ```bash
-   python -c "import pyats; print('pyats:', pyats.__version__)"
-   python -c "import genie; print('genie:', genie.__version__)"
+   python -c "import importlib.metadata; print('pyats:', importlib.metadata.version('pyats'))"
+   python -c "import importlib.metadata; print('genie:', importlib.metadata.version('genie'))"
    ```
 
 3. テストを実行する。
@@ -623,24 +623,6 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
    ```
 
 **完了条件**: `test_pyats_tools.py` の全テストが PASS する。
-
-```bash
-iida@s400win:~/git/agentic-ni$    python -c "import pyats; print('pyats:', pyats.__version__)"
-port genie; print('genie:', genie.__version__)"
-Traceback (most recent call last):
-  File "<string>", line 1, in <module>
-    import pyats; print('pyats:', pyats.__version__)
-                                  ^^^^^^^^^^^^^^^^^
-AttributeError: module 'pyats' has no attribute '__version__'
-iida@s400win:~/git/agentic-ni$    python -c "import genie; print('genie:', genie.__version__)"
-Traceback (most recent call last):
-  File "<string>", line 1, in <module>
-    import genie; print('genie:', genie.__version__)
-                                  ^^^^^^^^^^^^^^^^^
-AttributeError: module 'genie' has no attribute '__version__'
-
-```
-
 
 ---
 
