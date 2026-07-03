@@ -199,14 +199,8 @@ def _deploy(state: AgentState) -> str:
         except Exception:  # noqa: BLE001
             pass  # 存在しなければ無視
 
-    # インポート・コンフィグ投入・起動を単一クライアントで一括実行
+    # 内部で起動待ちまで完了する
     lab_id = cml_tools.deploy_lab(topology_yaml, device_configs)
-
-    # 全ノード起動待ち
-    ready = cml_tools.wait_for_nodes_ready(lab_id)
-    if not ready:
-        raise RuntimeError(f"ノードが規定時間内に起動しませんでした (lab_id={lab_id})")
-
     return lab_id
 
 

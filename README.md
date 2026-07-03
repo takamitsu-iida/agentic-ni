@@ -681,31 +681,3 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
-
-```
-ida@s400win:~/git/agentic-ni$ agentic-ni
-# エスカレーションレポート
-
-**生成日時**: 2026-07-03 19:04:10
-
-## 要件
-R1とR2をOSPFで接続する
-
-## 概要
-- 試行回数: 5 回（上限: 5 回）
-- 自動修正での解決に失敗しました
-
-## 最終テスト結果
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| (テスト未実施) | - | - |
-
-## 最終エラーログ（AIの推論）
-デプロイ失敗: LabNotFound: '3c786e33-1deb-43c2-a980-84be2006205b'
-
-## 推奨アクション
-自動修正の上限（5回）に達しました。以下を手動で確認してください:
-1. 要件の曖昧さや矛盾がないか確認する
-2. 最終エラーログを参考に手動でコンフィグを修正する
-3. CMLラボID `` で現状を確認する
-```

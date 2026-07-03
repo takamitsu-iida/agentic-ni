@@ -259,7 +259,6 @@ class TestDeploy:
         state = _base_state(device_configs={"R1": "cfg1", "R2": "cfg2"})
 
         with patch("agentic_ni.tools.cml_tools.deploy_lab", return_value="lab-001") as mdeploy, \
-             patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=True), \
              patch("agentic_ni.tools.cml_tools.delete_lab"):
             result = _deploy(state)
 
@@ -267,10 +266,11 @@ class TestDeploy:
         mdeploy.assert_called_once_with(_SAMPLE_TOPOLOGY, {"R1": "cfg1", "R2": "cfg2"})
 
     def test_raises_when_nodes_not_ready(self):
+        """deploy_lab が RuntimeError を送出した場合に _deploy が伝播させること。"""
         state = _base_state()
 
-        with patch("agentic_ni.tools.cml_tools.deploy_lab", return_value="lab-001"), \
-             patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=False), \
+        with patch("agentic_ni.tools.cml_tools.deploy_lab",
+                   side_effect=RuntimeError("ノードが規定時間内に起動しませんでした")), \
              patch("agentic_ni.tools.cml_tools.delete_lab"):
             with pytest.raises(RuntimeError, match="起動しませんでした"):
                 _deploy(state)
@@ -279,7 +279,6 @@ class TestDeploy:
         state = _base_state(lab_id="old-lab")
 
         with patch("agentic_ni.tools.cml_tools.deploy_lab", return_value="new-lab"), \
-             patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=True), \
              patch("agentic_ni.tools.cml_tools.delete_lab") as mdelete:
             _deploy(state)
 

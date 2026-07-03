@@ -126,8 +126,9 @@ def deploy_lab(
     topology_yaml: str,
     device_configs: dict[str, str],
     title: str = "agentic-ni-lab",
+    timeout: int = 300,
 ) -> str:
-    """ラボのインポート・コンフィグ投入・起動を単一クライアントで一括実行する。
+    """ラボのインポート・コンフィグ投入・起動・起動待ちを単一クライアントで一括実行する。
 
     複数の関数呼び出しで ClientLibrary インスタンスが分かれるとキャッシュ不整合が
     起きるため、デプロイシーケンス全体をこの関数内で完結させる。
@@ -136,6 +137,7 @@ def deploy_lab(
         topology_yaml: CML形式のトポロジー定義（YAML文字列）。
         device_configs: デバイス名 → コンフィグテキストのマッピング。
         title: CML上でのラボ名。同名ラボが存在する場合は削除される。
+        timeout: 全ノード起動待機のタイムアウト秒数（デフォルト: 300秒）。
 
     Returns:
         str: 作成されたラボのID。
@@ -143,6 +145,7 @@ def deploy_lab(
     Raises:
         EnvironmentError: CML接続情報が未設定の場合。
         KeyError: device_configs に含まれるノードがトポロジーに存在しない場合。
+        RuntimeError: ノードが規定時間内に起動しなかった場合。
         Exception: ラボのインポートまたは起動に失敗した場合。
     """
     client = _get_client()
@@ -168,7 +171,18 @@ def deploy_lab(
     # コンフィグ投入後に起動
     lab.start()
 
-    return lab.id
+    # 同一クライアント・同一ラボオブジェクトで起動待ち
+    deadline = time.monotonic() + timeout
+    poll_interval = 5
+    while time.monotonic() < deadline:
+        lab.sync_states()
+        if lab.has_converged():
+            return lab.id
+        time.sleep(poll_interval)
+
+    raise RuntimeError(
+        f"ノードが規定時間内に起動しませんでした (lab_id={lab.id}, timeout={timeout}s)"
+    )
 
 
 def create_lab(topology_yaml: str, title: str = "agentic-ni-lab") -> str:
