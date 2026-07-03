@@ -110,6 +110,18 @@ def _get_lab(client, lab_id: str):
 # ---------------------------------------------------------------------------
 
 
+def _remove_lab(lab) -> None:
+    """ラボを停止・wipe・削除する内部ヘルパー。
+
+    CML 2.x では stop() → wipe() → remove() の順序が必要。
+    wipe() を省略すると 'Lab is not wiped' エラーが発生する。
+    """
+    if lab.is_active():
+        lab.stop()
+    lab.wipe()
+    lab.remove()
+
+
 def deploy_lab(
     topology_yaml: str,
     device_configs: dict[str, str],
@@ -138,9 +150,7 @@ def deploy_lab(
     # 同名ラボが既に存在する場合はすべて削除する
     for existing_lab in client.all_labs():
         if existing_lab.title == title:
-            if existing_lab.is_active():
-                existing_lab.stop()
-            existing_lab.remove()
+            _remove_lab(existing_lab)
 
     # YAMLの補完・修正後にインポート（起動はしない）
     patched_yaml = _patch_topology_yaml(topology_yaml)
@@ -179,9 +189,7 @@ def create_lab(topology_yaml: str, title: str = "agentic-ni-lab") -> str:
 
     for existing_lab in client.all_labs():
         if existing_lab.title == title:
-            if existing_lab.is_active():
-                existing_lab.stop()
-            existing_lab.remove()
+            _remove_lab(existing_lab)
 
     patched_yaml = _patch_topology_yaml(topology_yaml)
     lab = client.import_lab(topology=patched_yaml, title=title)
@@ -215,9 +223,7 @@ def delete_lab(lab_id: str) -> None:
     """
     client = _get_client()
     lab = _get_lab(client, lab_id)
-    if lab.is_active():
-        lab.stop()
-    lab.remove()
+    _remove_lab(lab)
 
 
 def push_config(lab_id: str, node_name: str, config: str) -> None:

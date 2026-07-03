@@ -163,6 +163,7 @@ class TestDeleteLab:
             delete_lab("lab-abc")
 
         mock_lab.stop.assert_called_once()
+        mock_lab.wipe.assert_called_once()   # CML 2.x: wipe 必須
         mock_lab.remove.assert_called_once()
 
     def test_skips_stop_for_inactive_lab(self, monkeypatch):
@@ -176,6 +177,7 @@ class TestDeleteLab:
             delete_lab("lab-abc")
 
         mock_lab.stop.assert_not_called()
+        mock_lab.wipe.assert_called_once()   # 停止済みでも wipe は必要
         mock_lab.remove.assert_called_once()
 
     def test_raises_when_lab_not_found(self, monkeypatch):
