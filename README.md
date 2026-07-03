@@ -681,3 +681,82 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
+
+```
+iida@s400win:~/git/agentic-ni$ agentic-ni
+
+--- [DEBUG] Generated testbed YAML ---
+devices:
+  R1:
+    connections:
+      a:
+        command: open /agentic-ni-lab/R1/0
+        protocol: telnet
+        proxy: terminal_server
+      defaults:
+        class: unicon.Unicon
+    credentials:
+      default:
+        password: cisco
+        username: cisco
+      enable:
+        password: cisco
+    os: ios
+    platform: iosv
+    type: router
+  R2:
+    connections:
+      a:
+        command: open /agentic-ni-lab/R2/0
+        protocol: telnet
+        proxy: terminal_server
+      defaults:
+        class: unicon.Unicon
+    credentials:
+      default:
+        password: cisco
+        username: cisco
+      enable:
+        password: cisco
+    os: ios
+    platform: iosv
+    type: router
+  terminal_server:
+    connections:
+      cli:
+        ip: 192.168.122.212
+        port: 22
+        protocol: ssh
+    credentials:
+      default:
+        password: change_me
+        username: change_me
+    os: linux
+    type: server
+testbed:
+  name: agentic-ni-lab
+topology:
+  R1:
+    interfaces:
+      GigabitEthernet0/0:
+        link: d0f4d925-c18d-4a65-b3e2-f1d764e3223d
+        type: ethernet
+      Loopback0:
+        type: loopback
+  R2:
+    interfaces:
+      GigabitEthernet0/0:
+        link: d0f4d925-c18d-4a65-b3e2-f1d764e3223d
+        type: ethernet
+      Loopback0:
+        type: loopback
+
+--- [DEBUG] End of testbed YAML ---
+
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+```
