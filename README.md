@@ -484,19 +484,24 @@ tests/test_llm.py::test_get_llm_unknown_provider_raises PASSED
    <https://platform.openai.com/signup> にアクセスし、メールアドレスまたは Google / Microsoft アカウントでサインアップする。
 
 2. **支払い方法の登録**
-   左メニューの **Billing → Payment methods** からクレジットカードを登録する。
+   左メニューの **Billing → Payment methods** からクレジットカードを登録する。Billingが見つからないときは検索で探します。
    事前にクレジットをチャージしておく場合は **Add to credit balance** からチャージできる（最低 $5）。
 
    > **費用の目安**: `gpt-4o-mini` は $0.15 / 1M 入力トークン・$0.60 / 1M 出力トークン。
    > Phase 3 の疎通確認 1 回は 0.01 円以下。Phase 7 まで通しで動かしても数十円程度。
 
-3. **API キーの発行**
-   左メニューの **API keys → Create new secret key** をクリックする。
-   キー名（例: `agentic-ni`）を入力して **Create secret key** を押す。
-   表示された `sk-...` の文字列をコピーする。**この画面を閉じると二度と表示されない**ため、必ずコピーしておく。
+3. **（任意）使用量上限の設定**
+   **Billing → Usage Limits** で月次の上限金額（Usage limit）を設定しておくと、意図しない高額請求を防げる。
 
-4. **（任意）使用量上限の設定**
-   **Billing → Limits** で月次の上限金額（Usage limit）を設定しておくと、意図しない高額請求を防げる。
+4. **プロジェクトの作成**
+
+  左上に表示されるのは現在のプロジェクト名で、初期に作られるプロジェクトは `Default project` という名称になっている。
+  新しく `agentic-ai` プロジェクトを作成する。
+
+5. **API キーの発行**
+   左メニューの **API keys → Create new secret key** をクリックする。Nameは入れなくてもよいが `My Test Key` としておく。
+   プロジェクト名が `agentic-ni` になっていることを確認して **Create secret key** を押す。
+   表示された `sk-...` の文字列をコピーする。**この画面を閉じると二度と表示されない**ため、必ずコピーしておく。
 
 #### 3-2. `.env` の設定
 
@@ -514,8 +519,10 @@ OPENAI_MODEL=gpt-4o-mini
 
 > **注意**: `.env` はリポジトリにコミットしない。`.gitignore` に含まれていることを確認する。
 >
+> 以下を実行して ".env" が出力されれば OK
+>
 > ```bash
-> grep '\.env' .gitignore   # ".env" が出力されれば OK
+> grep '\.env' .gitignore
 > ```
 
 #### 3-3. スモークテストの実行
@@ -534,6 +541,12 @@ EOF
 LLM response: OK
 ```
 
+実行時に以下のメッセージを含む例外が出たらAPIキーが正しくない。
+
+```bash
+Error code: 401 - {'error': {'message': 'Incorrect API key provided: your_key*here. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
+```
+
 **完了条件**: LLM から応答テキストが返る。
 
 ---
@@ -547,6 +560,25 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 ```
 
 **完了条件**: 3 ファイルの全テストが PASS する。
+
+```text
+=================================================== warnings summary ===================================================
+src/agentic_ni/agents/validator.py:23
+  /home/iida/git/agentic-ni/src/agentic_ni/agents/validator.py:23: PytestCollectionWarning: cannot collect test class 'TestItem' because it has a __init__ constructor (from: tests/test_validator.py)
+    class TestItem(BaseModel):
+
+src/agentic_ni/agents/validator.py:36
+  /home/iida/git/agentic-ni/src/agentic_ni/agents/validator.py:36: PytestCollectionWarning: cannot collect test class 'TestPlan' because it has a __init__ constructor (from: tests/test_validator.py)
+    class TestPlan(BaseModel):
+
+src/agentic_ni/state.py:8
+  /home/iida/git/agentic-ni/src/agentic_ni/state.py:8: PytestCollectionWarning: cannot collect test class 'TestResult' because it has a __init__ constructor (from: tests/test_validator.py)
+    class TestResult(TypedDict):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============================================ 46 passed, 3 warnings in 0.46s ============================================
+```
+
 
 ---
 
