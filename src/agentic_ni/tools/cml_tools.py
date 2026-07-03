@@ -194,6 +194,62 @@ def deploy_lab(
     )
 
 
+def update_configs_and_restart(
+    lab_id: str,
+    device_configs: dict[str, str],
+    timeout: int = 300,
+) -> str:
+    """既存ラボのコンフィグを更新して再起動する（トポロジーはそのまま）。
+
+    ラボを停止・wipe後にコンフィグを差し替えて再起動し、収束を待つ。
+    トポロジー構造が変わらず設定のみ修正するリトライ時に使用する。
+
+    Args:
+        lab_id: 更新対象ラボのID。
+        device_configs: デバイス名 → 新しいコンフィグテキスト。
+        timeout: 起動待機のタイムアウト秒数。
+
+    Returns:
+        str: ラボID（変更なし）。
+
+    Raises:
+        KeyError: lab_id が存在しない、またはノードが見つからない場合。
+        RuntimeError: 起動タイムアウトの場合。
+    """
+    client = _get_client()
+    client.join_existing_lab(lab_id)
+    lab = client.get_local_lab(lab_id)
+    if lab is None:
+        raise KeyError(f"ラボが見つかりません: lab_id={lab_id!r}")
+
+    # 停止・wipe（Day-0 configを再適用できる状態にする）
+    if lab.is_active():
+        lab.stop()
+    lab.wipe()
+
+    # コンフィグを更新
+    for node_name, config in device_configs.items():
+        node = lab.get_node_by_label(node_name)
+        if node is None:
+            raise KeyError(
+                f"ノードが見つかりません: {node_name!r} (lab_id={lab_id!r})"
+            )
+        node.configuration = config
+
+    # 再起動・収束待ち
+    lab.start()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        lab.sync_states()
+        if lab.has_converged():
+            return lab_id
+        time.sleep(5)
+
+    raise RuntimeError(
+        f"ノードが規定時間内に起動しませんでした (lab_id={lab_id}, timeout={timeout}s)"
+    )
+
+
 def create_lab(topology_yaml: str, title: str = "agentic-ni-lab") -> str:
     """トポロジーYAMLからCMLラボをインポートする（起動はしない）。
 

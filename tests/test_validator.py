@@ -276,13 +276,15 @@ class TestDeploy:
                 _deploy(state)
 
     def test_deletes_old_lab_before_redeploy(self):
-        state = _base_state(lab_id="old-lab")
+        """既存ラボがある場合は update_configs_and_restart を試み、失敗時は deploy_lab にフォールバック。"""
+        state = _base_state(lab_id="old-lab", device_configs={"R1": "cfg1"})
 
-        with patch("agentic_ni.tools.cml_tools.deploy_lab", return_value="new-lab"), \
-             patch("agentic_ni.tools.cml_tools.delete_lab") as mdelete:
+        with patch("agentic_ni.tools.cml_tools.update_configs_and_restart",
+                   side_effect=Exception("lab gone")) as mupdate, \
+             patch("agentic_ni.tools.cml_tools.deploy_lab", return_value="new-lab"):
             _deploy(state)
 
-        mdelete.assert_called_once_with("old-lab")
+        mupdate.assert_called_once_with("old-lab", {"R1": "cfg1"})
 
 
 # ---------------------------------------------------------------------------

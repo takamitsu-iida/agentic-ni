@@ -145,6 +145,16 @@ def _execute_test(item: TestItem, testbed_yaml: str) -> TestResult:
         elif item.test_type == "ping":
             if not item.target:
                 return TestResult(test=item.description, result="FAIL", detail="target が未指定")
+            # IPアドレスの検証（"R2's IP Address" のような説明文を弾く）
+            import ipaddress
+            try:
+                ipaddress.ip_address(item.target)
+            except ValueError:
+                return TestResult(
+                    test=item.description,
+                    result="FAIL",
+                    detail=f"テスト実行エラー: ping宛先が有効なIPアドレスではありません: {item.target!r} (例: '10.0.0.2')",
+                )
             ok = pyats_tools.check_ping(testbed_yaml, item.device, item.target)
             detail = f"ping {item.target} {'OK' if ok else 'FAILED'}"
 
@@ -191,13 +201,14 @@ def _deploy(state: AgentState) -> str:
     topology_yaml = state.get("topology_yaml", "")
     device_configs = state.get("device_configs", {})
 
-    # 既存ラボがあれば削除して再デプロイ
+    # 既存ラボがあれば、まずコンフィグ更新・再起動を試みる（トポロジー再作成なし）
     old_lab_id = state.get("lab_id", "")
     if old_lab_id:
         try:
-            cml_tools.delete_lab(old_lab_id)
+            return cml_tools.update_configs_and_restart(old_lab_id, device_configs)
         except Exception:  # noqa: BLE001
-            pass  # 存在しなければ無視
+            # ラボが消えていた・ノード不一致などの場合はフルデプロイへ
+            pass
 
     # 内部で起動待ちまで完了する
     lab_id = cml_tools.deploy_lab(topology_yaml, device_configs)

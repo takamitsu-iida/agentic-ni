@@ -4,6 +4,9 @@
 
 frr-configs/
 
+# pyATS ルーター操作ログ
+logs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
