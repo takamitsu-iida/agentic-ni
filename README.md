@@ -681,3 +681,74 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
+
+```
+iida@s400win:~/git/agentic-ni$ agentic-ni
+Traceback (most recent call last):
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/virl2_client/virl2_client.py", line 665, in get_local_lab
+    return self._labs[lab_id]
+           ~~~~~~~~~~^^^^^^^^
+KeyError: 'e766a11b-fa8f-4cee-955f-a64ffbfe53f3'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/iida/git/agentic-ni/.venv/bin/agentic-ni", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/iida/git/agentic-ni/src/agentic_ni/graph.py", line 259, in main
+    result = app.invoke(initial_state(requirement))
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py", line 3928, in invoke
+    for chunk in self.stream(
+                 ~~~~~~~~~~~^
+        input,
+        ^^^^^^
+    ...<11 lines>...
+        **kwargs,
+        ^^^^^^^^^
+    ):
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py", line 2982, in stream
+    for _ in runner.tick(
+             ~~~~~~~~~~~^
+        [t for t in loop.tasks.values() if not t.writes],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        schedule_task=loop.accept_push,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py", line 207, in tick
+    run_with_retry(
+    ~~~~~~~~~~~~~~^
+        t,
+        ^^
+    ...<10 lines>...
+        },
+        ^^
+    )
+    ^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py", line 617, in run_with_retry
+    return task.proc.invoke(task.input, config)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py", line 684, in invoke
+    input = context.run(step.invoke, input, config, **kwargs)
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py", line 426, in invoke
+    ret = self.func(*args, **kwargs)
+  File "/home/iida/git/agentic-ni/src/agentic_ni/graph.py", line 36, in validator_node
+    return validator.run(state)
+           ~~~~~~~~~~~~~^^^^^^^
+  File "/home/iida/git/agentic-ni/src/agentic_ni/agents/validator.py", line 248, in run
+    testbed_yaml = pyats_tools.build_testbed(lab_id, state.get("device_configs", {}))
+  File "/home/iida/git/agentic-ni/src/agentic_ni/tools/pyats_tools.py", line 84, in build_testbed
+    lab = _get_lab(client, lab_id)
+  File "/home/iida/git/agentic-ni/src/agentic_ni/tools/cml_tools.py", line 98, in _get_lab
+    lab = client.get_local_lab(lab_id)
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/virl2_client/utils.py", line 225, in wrapper_locked
+    return func(*args, **kwargs)
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/virl2_client/virl2_client.py", line 667, in get_local_lab
+    raise LabNotFound(lab_id)
+virl2_client.exceptions.LabNotFound: 'e766a11b-fa8f-4cee-955f-a64ffbfe53f3'
+During task with name 'validator' and id '06e93622-5a37-9344-339b-fbd5f7954d2c'
+iida@s400win:~/git/agentic-ni$
+```
