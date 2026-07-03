@@ -255,34 +255,21 @@ class TestExecuteTest:
 
 
 class TestDeploy:
-    def _patch_cml(self, lab_id: str = "lab-001", ready: bool = True):
-        mock_cml = MagicMock()
-        mock_cml.create_lab.return_value = lab_id
-        mock_cml.wait_for_nodes_ready.return_value = ready
-        return patch("agentic_ni.agents.validator.cml_tools", mock_cml), mock_cml
-
     def test_creates_lab_and_pushes_configs(self):
         state = _base_state(device_configs={"R1": "cfg1", "R2": "cfg2"})
-        patch_cml, mock_cml = self._patch_cml("lab-001")
 
-        with patch("agentic_ni.tools.cml_tools.create_lab", return_value="lab-001") as mcreate, \
-             patch("agentic_ni.tools.cml_tools.push_config") as mpush, \
-             patch("agentic_ni.tools.cml_tools.start_lab") as mstart, \
+        with patch("agentic_ni.tools.cml_tools.deploy_lab", return_value="lab-001") as mdeploy, \
              patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=True), \
              patch("agentic_ni.tools.cml_tools.delete_lab"):
             result = _deploy(state)
 
         assert result == "lab-001"
-        mcreate.assert_called_once_with(_SAMPLE_TOPOLOGY)
-        assert mpush.call_count == 2
-        mstart.assert_called_once_with("lab-001")
+        mdeploy.assert_called_once_with(_SAMPLE_TOPOLOGY, {"R1": "cfg1", "R2": "cfg2"})
 
     def test_raises_when_nodes_not_ready(self):
         state = _base_state()
 
-        with patch("agentic_ni.tools.cml_tools.create_lab", return_value="lab-001"), \
-             patch("agentic_ni.tools.cml_tools.push_config"), \
-             patch("agentic_ni.tools.cml_tools.start_lab"), \
+        with patch("agentic_ni.tools.cml_tools.deploy_lab", return_value="lab-001"), \
              patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=False), \
              patch("agentic_ni.tools.cml_tools.delete_lab"):
             with pytest.raises(RuntimeError, match="起動しませんでした"):
@@ -291,9 +278,7 @@ class TestDeploy:
     def test_deletes_old_lab_before_redeploy(self):
         state = _base_state(lab_id="old-lab")
 
-        with patch("agentic_ni.tools.cml_tools.create_lab", return_value="new-lab"), \
-             patch("agentic_ni.tools.cml_tools.push_config"), \
-             patch("agentic_ni.tools.cml_tools.start_lab"), \
+        with patch("agentic_ni.tools.cml_tools.deploy_lab", return_value="new-lab"), \
              patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=True), \
              patch("agentic_ni.tools.cml_tools.delete_lab") as mdelete:
             _deploy(state)

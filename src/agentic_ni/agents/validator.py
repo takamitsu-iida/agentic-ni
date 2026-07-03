@@ -199,14 +199,8 @@ def _deploy(state: AgentState) -> str:
         except Exception:  # noqa: BLE001
             pass  # 存在しなければ無視
 
-    lab_id = cml_tools.create_lab(topology_yaml)   # インポートのみ（起動しない）
-
-    # 各機器にコンフィグを投入（Day-0 config: start前に設定する必要がある）
-    for node_name, config in device_configs.items():
-        cml_tools.push_config(lab_id, node_name, config)
-
-    # コンフィグ投入後にラボを起動
-    cml_tools.start_lab(lab_id)
+    # インポート・コンフィグ投入・起動を単一クライアントで一括実行
+    lab_id = cml_tools.deploy_lab(topology_yaml, device_configs)
 
     # 全ノード起動待ち
     ready = cml_tools.wait_for_nodes_ready(lab_id)

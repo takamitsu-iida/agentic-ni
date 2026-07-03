@@ -110,15 +110,19 @@ def _get_lab(client, lab_id: str):
 # ---------------------------------------------------------------------------
 
 
-def create_lab(topology_yaml: str, title: str = "agentic-ni-lab") -> str:
-    """トポロジーYAMLからCMLラボをインポートする（起動はしない）。
+def deploy_lab(
+    topology_yaml: str,
+    device_configs: dict[str, str],
+    title: str = "agentic-ni-lab",
+) -> str:
+    """ラボのインポート・コンフィグ投入・起動を単一クライアントで一括実行する。
 
-    同名のラボが既に存在する場合は事前に停止・削除してからインポートする。
-    ノードへのコンフィグ投入後に start_lab() を呼び出してラボを起動すること。
-    Day-0 コンフィグを正しく適用するため、start前にコンフィグを設定する必要がある。
+    複数の関数呼び出しで ClientLibrary インスタンスが分かれるとキャッシュ不整合が
+    起きるため、デプロイシーケンス全体をこの関数内で完結させる。
 
     Args:
         topology_yaml: CML形式のトポロジー定義（YAML文字列）。
+        device_configs: デバイス名 → コンフィグテキストのマッピング。
         title: CML上でのラボ名。同名ラボが存在する場合は削除される。
 
     Returns:
@@ -126,11 +130,53 @@ def create_lab(topology_yaml: str, title: str = "agentic-ni-lab") -> str:
 
     Raises:
         EnvironmentError: CML接続情報が未設定の場合。
-        Exception: ラボのインポートに失敗した場合。
+        KeyError: device_configs に含まれるノードがトポロジーに存在しない場合。
+        Exception: ラボのインポートまたは起動に失敗した場合。
     """
     client = _get_client()
 
     # 同名ラボが既に存在する場合はすべて削除する
+    for existing_lab in client.all_labs():
+        if existing_lab.title == title:
+            if existing_lab.is_active():
+                existing_lab.stop()
+            existing_lab.remove()
+
+    # YAMLの補完・修正後にインポート（起動はしない）
+    patched_yaml = _patch_topology_yaml(topology_yaml)
+    lab = client.import_lab(topology=patched_yaml, title=title)
+
+    # 同一クライアント・同一ラボオブジェクトでコンフィグを投入（Day-0 config）
+    for node_name, config in device_configs.items():
+        node = lab.get_node_by_label(node_name)
+        if node is None:
+            raise KeyError(
+                f"ノードが見つかりません: node_name={node_name!r}, lab_id={lab.id!r}"
+            )
+        node.configuration = config
+
+    # コンフィグ投入後に起動
+    lab.start()
+
+    return lab.id
+
+
+def create_lab(topology_yaml: str, title: str = "agentic-ni-lab") -> str:
+    """トポロジーYAMLからCMLラボをインポートする（起動はしない）。
+
+    .. note::
+        デプロイ全体には :func:`deploy_lab` を使用すること。
+        この関数単体で使う場合は push_config() → start_lab() の順に呼び出すこと。
+
+    Args:
+        topology_yaml: CML形式のトポロジー定義（YAML文字列）。
+        title: CML上でのラボ名。同名ラボが存在する場合は削除される。
+
+    Returns:
+        str: 作成されたラボのID。
+    """
+    client = _get_client()
+
     for existing_lab in client.all_labs():
         if existing_lab.title == title:
             if existing_lab.is_active():
