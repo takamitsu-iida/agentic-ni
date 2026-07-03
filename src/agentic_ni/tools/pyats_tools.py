@@ -77,12 +77,20 @@ def build_testbed(lab_id: str, device_configs: dict[str, str]) -> str:
         EnvironmentError: CML接続情報が未設定の場合。
         KeyError: lab_id が存在しない場合。
     """
+    import sys
     # virl2_client は Phase 1 でインストール済み
     from agentic_ni.tools.cml_tools import _get_client, _get_lab
 
     client = _get_client()
     lab = _get_lab(client, lab_id)
-    return lab.get_pyats_testbed()
+    testbed_yaml = lab.get_pyats_testbed()
+
+    # デバッグ: 生成された testbed YAML を stderr に出力
+    print("\n--- [DEBUG] Generated testbed YAML ---", file=sys.stderr)
+    print(testbed_yaml, file=sys.stderr)
+    print("--- [DEBUG] End of testbed YAML ---\n", file=sys.stderr)
+
+    return testbed_yaml
 
 
 def run_show_command(testbed_yaml: str, device_name: str, command: str) -> dict:
