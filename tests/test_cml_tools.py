@@ -180,6 +180,7 @@ class TestDeleteLab:
 
     def test_raises_when_lab_not_found(self, monkeypatch):
         mock_client = MagicMock()
+        # get_local_lab が常に None を返す（join_existing_labs 後も同様）
         mock_client.get_local_lab.return_value = None
 
         with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client):
@@ -187,6 +188,9 @@ class TestDeleteLab:
 
             with pytest.raises(KeyError, match="lab-missing"):
                 delete_lab("lab-missing")
+
+        # キャッシュミス時に join_existing_labs() が呼ばれること
+        mock_client.join_existing_labs.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
