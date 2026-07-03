@@ -237,21 +237,27 @@ def run(state: AgentState) -> dict[str, Any]:
     """
     llm = get_llm()
     new_retry_count = state.get("retry_count", 0) + 1
+    trial = new_retry_count
 
     # --- 1. デプロイ ---
+    print(f"  [1/4] CML にデプロイ中...", flush=True)
     try:
         lab_id = _deploy(state)
     except Exception as exc:  # noqa: BLE001
+        print(f"  [1/4] デプロイ失敗: {exc}", flush=True)
         return {
             "lab_id": state.get("lab_id", ""),
             "test_results": [],
             "error_log": f"デプロイ失敗: {type(exc).__name__}: {exc}",
             "retry_count": new_retry_count,
         }
+    print(f"  [1/4] デプロイ完了 (lab_id={lab_id})", flush=True)
 
     # --- 2. テスト計画立案 ---
+    print(f"  [2/4] テスト計画を立案中...", flush=True)
     structured_llm = llm.with_structured_output(TestPlan, method="function_calling")
     plan: TestPlan = structured_llm.invoke(_build_test_plan_messages(state))
+    print(f"  [2/4] テスト計画完了 ({len(plan.tests)} 件)", flush=True)
 
     # --- 3. テストベッド取得 ---
     from agentic_ni.tools import pyats_tools
@@ -259,15 +265,21 @@ def run(state: AgentState) -> dict[str, Any]:
     testbed_yaml = pyats_tools.build_testbed(lab_id, state.get("device_configs", {}))
 
     # --- 4. テスト実行 ---
-    test_results: list[TestResult] = [
-        _execute_test(item, testbed_yaml) for item in plan.tests
-    ]
+    print(f"  [3/4] テストを実行中...", flush=True)
+    test_results: list[TestResult] = []
+    for i, item in enumerate(plan.tests, 1):
+        print(f"        ({i}/{len(plan.tests)}) {item.description}", flush=True)
+        result = _execute_test(item, testbed_yaml)
+        mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
+        print(f"               → {mark}  {result['detail']}", flush=True)
+        test_results.append(result)
 
     # --- 5. 失敗分析 ---
     failed = [r for r in test_results if r["result"] == "FAIL"]
     error_log = ""
 
     if failed:
+        print(f"  [4/4] 失敗原因を AI が分析中... ({len(failed)} 件失敗)", flush=True)
         analysis_llm = llm.with_structured_output(FailureAnalysis, method="function_calling")
         analysis: FailureAnalysis = analysis_llm.invoke(
             _build_analysis_messages(state, failed)
@@ -276,6 +288,9 @@ def run(state: AgentState) -> dict[str, Any]:
             f"## 根本原因\n{analysis.root_cause}\n\n"
             f"## 修正依頼\n{analysis.suggestion}"
         )
+        print(f"  [4/4] 分析完了", flush=True)
+    else:
+        print(f"  [4/4] 全テスト PASS", flush=True)
 
     return {
         "lab_id": lab_id,

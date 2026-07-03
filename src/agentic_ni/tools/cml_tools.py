@@ -160,15 +160,19 @@ def deploy_lab(
     client = _get_client()
 
     # 同名ラボが既に存在する場合はすべて削除する
-    for existing_lab in client.all_labs():
-        if existing_lab.title == title:
+    existing = [lab for lab in client.all_labs() if lab.title == title]
+    if existing:
+        print(f"    同名ラボ {len(existing)} 件を削除中...", flush=True)
+        for existing_lab in existing:
             _remove_lab(existing_lab)
 
     # YAMLの補完・修正後にインポート（起動はしない）
+    print("    ラボをインポート中...", flush=True)
     patched_yaml = _patch_topology_yaml(topology_yaml)
     lab = client.import_lab(topology=patched_yaml, title=title)
 
     # 同一クライアント・同一ラボオブジェクトでコンフィグを投入（Day-0 config）
+    print(f"    コンフィグを投入中 ({len(device_configs)} ノード)...", flush=True)
     for node_name, config in device_configs.items():
         node = lab.get_node_by_label(node_name)
         if node is None:
@@ -178,14 +182,17 @@ def deploy_lab(
         node.configuration = config
 
     # コンフィグ投入後に起動
+    print("    ラボを起動中...", flush=True)
     lab.start()
 
     # 同一クライアント・同一ラボオブジェクトで起動待ち
+    print("    ノードの起動を待機中...", flush=True)
     deadline = time.monotonic() + timeout
     poll_interval = 5
     while time.monotonic() < deadline:
         lab.sync_states()
         if lab.has_converged():
+            print(f"    起動完了 (lab_id={lab.id})", flush=True)
             return lab.id
         time.sleep(poll_interval)
 
@@ -223,11 +230,13 @@ def update_configs_and_restart(
         raise KeyError(f"ラボが見つかりません: lab_id={lab_id!r}")
 
     # 停止・wipe（Day-0 configを再適用できる状態にする）
+    print("    既存ラボを停止・wipe中...", flush=True)
     if lab.is_active():
         lab.stop()
     lab.wipe()
 
     # コンフィグを更新
+    print(f"    コンフィグを更新中 ({len(device_configs)} ノード)...", flush=True)
     for node_name, config in device_configs.items():
         node = lab.get_node_by_label(node_name)
         if node is None:
@@ -237,11 +246,14 @@ def update_configs_and_restart(
         node.configuration = config
 
     # 再起動・収束待ち
+    print("    ラボを再起動中...", flush=True)
     lab.start()
+    print("    ノードの起動を待機中...", flush=True)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         lab.sync_states()
         if lab.has_converged():
+            print(f"    起動完了 (lab_id={lab_id})", flush=True)
             return lab_id
         time.sleep(5)
 

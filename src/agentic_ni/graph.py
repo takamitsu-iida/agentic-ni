@@ -28,16 +28,28 @@ MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "5"))
 
 def architect_node(state: AgentState) -> dict:
     """設計エージェント。要件またはエラーログからトポロジーYAMLと機器コンフィグを生成する。"""
-    return architect.run(state)
+    trial = state.get("retry_count", 0) + 1
+    mode = "修正設計" if state.get("error_log") else "初回設計"
+    print(f"\n{'='*60}", flush=True)
+    print(f"[第{trial}回 / 上限{MAX_RETRIES}回]  設計エージェント  ({mode})", flush=True)
+    print(f"{'='*60}", flush=True)
+    print("  >>> LLM にトポロジーとコンフィグを生成させています...", flush=True)
+    result = architect.run(state)
+    print("  <<< 設計完了", flush=True)
+    return result
 
 
 def validator_node(state: AgentState) -> dict:
     """検証エージェント。CMLへデプロイし、テスト実行・失敗推論を行う。"""
-    return validator.run(state)
+    trial = state.get("retry_count", 0) + 1
+    print(f"\n[第{trial}回 / 上限{MAX_RETRIES}回]  検証エージェント  開始", flush=True)
+    result = validator.run(state)
+    return result
 
 
 def report_node(state: AgentState) -> dict:
     """全PASS時の最終レポートを生成する。"""
+    print("\n  >>> 全テスト PASS! 最終レポートを生成しています...", flush=True)
     results = state.get("test_results", [])
     passed = [r for r in results if r["result"] == "PASS"]
     failed = [r for r in results if r["result"] == "FAIL"]
@@ -79,6 +91,7 @@ def report_node(state: AgentState) -> dict:
 
 def escalate_node(state: AgentState) -> dict:
     """最大リトライ超過時のエスカレーションレポートを生成する。"""
+    print(f"\n  >>> 上限に達しました。エスカレーションレポートを生成しています...", flush=True)
     results = state.get("test_results", [])
     result_lines = "\n".join(
         f"| {r['test']} | {'✅ PASS' if r['result'] == 'PASS' else '❌ FAIL'} | {r['detail']} |"
