@@ -681,3 +681,71 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
+
+
+```
+iida@s400win:~/git/agentic-ni$ agentic-ni
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+# 検証成功レポート
+
+**生成日時**: 2026-07-03 20:34:43
+
+## 要件
+R1とR2をOSPFで接続する
+
+## 概要
+- 試行回数: 2 回
+- PASSテスト: 2 件
+- FAILテスト: 0 件
+
+## テスト結果
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| Verify OSPF neighbor establishment on R1 | ✅ PASS | 1 neighbor(s) FULL |
+| Verify OSPF neighbor establishment on R2 | ✅ PASS | 1 neighbor(s) FULL |
+
+## デプロイ情報
+- ラボID: 724f22f6-cc8e-4eec-affe-9b32090ac45a
+
+すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。
+
+```
+
+
+R1のコンソールでは下記のようなエラーも見られました。
+
+```
+Configuration register is 0x0
+
+R1#config term
+Enter configuration commands, one per line.  End with CNTL/Z.
+R1(config)#no logging console
+R1(config)#line console 0
+R1(config-line)#exec-timeout 0
+R1(config-line)#line vty 0 4
+R1(config-line)#exec-timeout 0
+R1(config-line)#end
+R1#ping R2's IP Address
+ping R2's IP Address
+          ^
+% Invalid input detected at '^' marker.
+
+R1#
+```
