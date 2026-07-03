@@ -102,9 +102,9 @@ def _get_lab(client, lab_id: str):
     except Exception:  # noqa: BLE001  # LabNotFound 也含む
         pass
 
-    # キャッシュミス・例外: サーバーから全ラボを同期して再試行
-    client.join_existing_labs()
+    # キャッシュミス・例外: サーバーから該当ラボを同期して再試行
     try:
+        client.join_existing_lab(lab_id)
         lab = client.get_local_lab(lab_id)
         if lab is not None:
             return lab

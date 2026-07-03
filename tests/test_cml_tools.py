@@ -191,8 +191,8 @@ class TestDeleteLab:
             with pytest.raises(KeyError, match="lab-missing"):
                 delete_lab("lab-missing")
 
-        # キャッシュミス時に join_existing_labs() が呼ばれること
-        mock_client.join_existing_labs.assert_called_once()
+        # キャッシュミス時に join_existing_lab() が呼ばれること
+        mock_client.join_existing_lab.assert_called_once_with("lab-missing")
 
 
 # ---------------------------------------------------------------------------
