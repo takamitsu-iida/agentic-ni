@@ -1,0 +1,13 @@
+# コア依存パッケージ（pyproject.toml の dependencies と同期）
+langgraph>=0.2
+langchain-core>=0.3
+langchain-openai>=0.2
+langchain-anthropic>=0.3
+langchain-ollama>=0.2
+virl2-client>=2.10,<2.11
+pydantic>=2.0
+python-dotenv>=1.0
+
+# 開発・テスト用（pyproject.toml の dependency-groups.dev と同期）
+pytest>=8.0
+pytest-asyncio>=0.24

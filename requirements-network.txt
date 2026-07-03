@@ -1,0 +1,4 @@
+# ネットワーク検証オプション依存（pyproject.toml の optional-dependencies.network と同期）
+# Phase 6 で追加インストールする
+pyats>=24.0
+genie>=24.0
