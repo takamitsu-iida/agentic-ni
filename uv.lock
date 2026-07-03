@@ -44,7 +44,7 @@ requires-dist = [
     { name = "pyats", marker = "extra == 'network'", specifier = ">=24.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "virl2-client", specifier = ">=2.7" },
+    { name = "virl2-client", specifier = ">=2.10,<2.11" },
 ]
 provides-extras = ["network"]
 

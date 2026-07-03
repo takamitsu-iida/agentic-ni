@@ -386,7 +386,7 @@ Phase 3・4はCML環境がなくてもモックで進められます。
 外部依存（LLM API → CML → pyATS）の順に段階的に検証します。
 
 ```
-Phase 1: 環境セットアップ確認（外部接続不要）
+Phase 1: 環境セットアップ確認
 Phase 2: LLMファクトリー単体テスト（APIキー不要・モック）
 Phase 3: .env 設定 → LLM 実疎通確認
 Phase 4: 設計エージェント・グラフ単体テスト（LLMモック）
@@ -403,17 +403,39 @@ Phase 7: E2E テスト（全機能統合）
 
 **前提条件**: Python 3.12 以上、`uv` がインストール済みであること。
 
+uvがインストールされていな場合は公式に記載の方法でインストールします。管理者権限は不要です。
+
 ```bash
-# リポジトリをクローン後、プロジェクトルートへ移動
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+このリポジトリをクローンします。
+
+```bash
+git clone https://github.com/takamitsu-iida/agentic-ni.git
+```
+
+リポジトリをクローン後、プロジェクトルートへ移動します。
+
+```bash
 cd agentic-ni
+```
 
-# 仮想環境の作成と依存パッケージのインストール
+依存パッケージをインストールします。
+
+```bash
 uv sync
+```
 
-# 仮想環境を有効化
+仮想環境を有効化します。direnvを入れているなら`direnv allow`して有効にします。
+
+```bash
 source .venv/bin/activate
+```
 
-# モジュールの import が通るか確認（APIキー不要）
+Pythonモジュールの import が通るか確認します。
+
+```bash
 python -c "from agentic_ni.state import AgentState; print('state: OK')"
 python -c "from agentic_ni.llm import get_llm; print('llm: OK')"
 python -c "from agentic_ni.graph import build_graph; print('graph: OK')"
