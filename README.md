@@ -561,25 +561,6 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 
 **完了条件**: 3 ファイルの全テストが PASS する。
 
-```text
-=================================================== warnings summary ===================================================
-src/agentic_ni/agents/validator.py:23
-  /home/iida/git/agentic-ni/src/agentic_ni/agents/validator.py:23: PytestCollectionWarning: cannot collect test class 'TestItem' because it has a __init__ constructor (from: tests/test_validator.py)
-    class TestItem(BaseModel):
-
-src/agentic_ni/agents/validator.py:36
-  /home/iida/git/agentic-ni/src/agentic_ni/agents/validator.py:36: PytestCollectionWarning: cannot collect test class 'TestPlan' because it has a __init__ constructor (from: tests/test_validator.py)
-    class TestPlan(BaseModel):
-
-src/agentic_ni/state.py:8
-  /home/iida/git/agentic-ni/src/agentic_ni/state.py:8: PytestCollectionWarning: cannot collect test class 'TestResult' because it has a __init__ constructor (from: tests/test_validator.py)
-    class TestResult(TypedDict):
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-============================================ 46 passed, 3 warnings in 0.46s ============================================
-```
-
-
 ---
 
 ### Phase 5 — CML 接続確認
