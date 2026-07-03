@@ -89,20 +89,29 @@ def _get_client():
 def _get_lab(client, lab_id: str):
     """lab_id から Lab オブジェクトを取得する。
 
-    ローカルキャッシュにない場合（別の ClientLibrary インスタンスで作成したラボなど）は
-    サーバーから全ラボを同期してから再検索する。
+    get_local_lab() はキャッシュ未登録時に None ではなく LabNotFound 例外を
+    投げる場合があるため、例外もキャッチしてサーバーから同期後に再試行する。
 
     Raises:
-        KeyError: 指定した lab_id が存在しない場合
+        KeyError: 同期後も指定した lab_id が存在しない場合
     """
-    lab = client.get_local_lab(lab_id)
-    if lab is None:
-        # キャッシュミス: サーバーから同期して再試行
-        client.join_existing_labs()
+    try:
         lab = client.get_local_lab(lab_id)
-    if lab is None:
-        raise KeyError(f"ラボが見つかりません: lab_id={lab_id!r}")
-    return lab
+        if lab is not None:
+            return lab
+    except Exception:  # noqa: BLE001  # LabNotFound 也含む
+        pass
+
+    # キャッシュミス・例外: サーバーから全ラボを同期して再試行
+    client.join_existing_labs()
+    try:
+        lab = client.get_local_lab(lab_id)
+        if lab is not None:
+            return lab
+    except Exception:  # noqa: BLE001
+        pass
+
+    raise KeyError(f"ラボが見つかりません: lab_id={lab_id!r}")
 
 
 # ---------------------------------------------------------------------------
