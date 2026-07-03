@@ -746,3 +746,36 @@ grep -A5 "show ip ospf neighbor" logs/agentic-ni-*.log
 # 最大リトライ回数（デフォルト: 5）
 MAX_RETRIES=3
 ```
+
+
+失敗牽引をAIが分析中、分析完了、のあとに分析結果のサマリを表示して欲しい。
+
+```
+============================================================
+[第1回 / 上限5回]  設計エージェント  (初回設計)
+============================================================
+  >>> LLM にトポロジーとコンフィグを生成させています...
+  <<< 設計完了
+
+[第1回 / 上限5回]  検証エージェント  開始
+  [1/4] CML にデプロイ中...
+    ラボをインポート中...
+    コンフィグを投入中 (2 ノード)...
+    ラボを起動中...
+    ノードの起動を待機中...
+    起動完了 (lab_id=5a6a5c80-dda6-457d-8cb5-767a9b082977)
+  [1/4] デプロイ完了 (lab_id=5a6a5c80-dda6-457d-8cb5-767a9b082977)
+  [2/4] テスト計画を立案中...
+  [2/4] テスト計画完了 (4 件)
+  [3/4] テストを実行中...
+        (1/4) Verify OSPF neighbor relationship on R1.
+               → ✅ PASS  1 neighbor(s) FULL
+        (2/4) Verify OSPF neighbor relationship on R2.
+               → ✅ PASS  1 neighbor(s) FULL
+        (3/4) Check connectivity from R1 to R2 via OSPF-established route.
+               → ❌ FAIL  ping 10.0.0.2 FAILED
+        (4/4) Check connectivity from R2 to R1 via OSPF-established route.
+               → ❌ FAIL  ping 10.0.0.1 FAILED
+  [4/4] 失敗原因を AI が分析中... (2 件失敗)
+  [4/4] 分析完了
+```
