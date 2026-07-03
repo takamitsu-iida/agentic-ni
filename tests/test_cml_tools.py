@@ -72,20 +72,54 @@ def _make_mock_client(lab: MagicMock | None = None) -> MagicMock:
 
 
 class TestCreateLab:
+    _VALID_YAML = "lab:\n  title: test\n  version: '0.1.0'\nnodes: []\nlinks: []"
+
     def test_returns_lab_id(self, monkeypatch):
         mock_lab = _make_mock_lab(lab_id="lab-xyz")
         mock_client = _make_mock_client(mock_lab)
+        mock_client.all_labs.return_value = []  # 同名ラボなし
 
         with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client):
             from agentic_ni.tools.cml_tools import create_lab
 
-            result = create_lab("topology: yaml", title="test-lab")
+            result = create_lab(self._VALID_YAML, title="test-lab")
 
         assert result == "lab-xyz"
-        mock_client.import_lab.assert_called_once_with(
-            topology="topology: yaml", title="test-lab"
-        )
-        mock_lab.start.assert_called_once()
+        mock_client.import_lab.assert_called_once()
+        # start は呼ばれないこと（start_lab で別途呼ぶ）
+        mock_lab.start.assert_not_called()
+
+    def test_deletes_existing_lab_with_same_title(self, monkeypatch):
+        """同名ラボが存在する場合、インポート前に削除されること。"""
+        existing_active = MagicMock()
+        existing_active.title = "agentic-ni-lab"
+        existing_active.is_active.return_value = True
+
+        existing_stopped = MagicMock()
+        existing_stopped.title = "agentic-ni-lab"
+        existing_stopped.is_active.return_value = False
+
+        other_lab = MagicMock()
+        other_lab.title = "other-lab"
+
+        new_lab = _make_mock_lab(lab_id="new-lab-id")
+        mock_client = MagicMock()
+        mock_client.all_labs.return_value = [existing_active, existing_stopped, other_lab]
+        mock_client.import_lab.return_value = new_lab
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client):
+            from agentic_ni.tools.cml_tools import create_lab
+            result = create_lab(self._VALID_YAML, title="agentic-ni-lab")
+
+        # 同名の2件は stop/remove される
+        existing_active.stop.assert_called_once()
+        existing_active.remove.assert_called_once()
+        existing_stopped.stop.assert_not_called()   # 停止済みなので stop 不要
+        existing_stopped.remove.assert_called_once()
+        # 別名ラボは触らない
+        other_lab.stop.assert_not_called()
+        other_lab.remove.assert_not_called()
+        assert result == "new-lab-id"
 
     def test_raises_on_missing_env(self, monkeypatch):
         monkeypatch.delenv("CML_URL", raising=False)
@@ -97,6 +131,19 @@ class TestCreateLab:
 
         with pytest.raises(EnvironmentError, match="CML_URL"):
             cml_tools._get_client()
+
+
+class TestStartLab:
+    def test_calls_lab_start(self, monkeypatch):
+        mock_lab = _make_mock_lab(lab_id="lab-xyz")
+        mock_client = _make_mock_client(mock_lab)
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client):
+            from agentic_ni.tools.cml_tools import start_lab
+
+            start_lab("lab-xyz")
+
+        mock_lab.start.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

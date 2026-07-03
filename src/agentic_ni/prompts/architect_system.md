@@ -21,6 +21,7 @@ lab:
   description: "<説明>"
   notes: ""
   timestamp: 0
+  version: "0.1.0"     # CML 2.x 必須フィールド
 
 nodes:
   - id: "n0"
@@ -45,7 +46,7 @@ links:
     i1: "i0"
     n2: "n1"
     i2: "i0"
-    label: ""
+    label: "l0"               # 空文字不可。idと同じ値を使用すること
 ```
 
 **ノードIDのルール**: n0, n1, n2, ... の連番
@@ -75,9 +76,11 @@ end
 ## 出力ルール
 
 1. **topology_yaml**: 有効なCML YAMLを文字列で出力する。インデントは2スペース。
-2. **device_configs**: キーはノードの `label` と一致させること（例: "R1", "R2"）。
-3. **design_rationale**: 設計の根拠を簡潔に説明する（100字以内）。
-4. **エラー修正時**: `error_log` に記載された原因箇所のみ修正する。無関係な設定は変更しない。
+2. **topology_yaml 内の `lab.version`**: 必ず `"0.1.0"` を設定する（CML 2.x 必須）。
+3. **topology_yaml 内の `links[].label`**: 必ず1文字以上を設定する（空文字不可）。idと同じ値を使用すること。
+4. **device_configs**: キーはノードの `label` と一致させること（例: "R1", "R2"）。
+5. **design_rationale**: 設計の根拠を簡潔に説明する（100字以内）。
+6. **エラー修正時**: `error_log` に記載された原因箇所のみ修正する。無関係な設定は変更しない。
 
 ## 注意事項
 

@@ -11,6 +11,7 @@ import os
 import time
 import warnings
 
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,6 +20,30 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # 内部ヘルパー
 # ---------------------------------------------------------------------------
+
+
+def _patch_topology_yaml(topology_yaml: str) -> str:
+    """CML 2.10 の必須フィールドを補完し、不正値を修正する。
+
+    LLM が生成した YAML に以下の問題が起きることがあるため、
+    CML API に送る前にここで安全に修正する。
+
+    * lab.version が存在しない → "0.1.0" を設定
+    * links[].label が空文字 → link の id と同じ値を設定
+    """
+    data = yaml.safe_load(topology_yaml)
+
+    # lab.version が必須 (CML 2.x)
+    lab = data.setdefault("lab", {})
+    if not lab.get("version"):
+        lab["version"] = "0.1.0"
+
+    # links[].label は空文字不可
+    for i, link in enumerate(data.get("links", [])):
+        if not link.get("label"):
+            link["label"] = link.get("id", f"l{i}")
+
+    return yaml.dump(data, default_flow_style=False, allow_unicode=True)
 
 
 def _get_client():
@@ -79,26 +104,51 @@ def _get_lab(client, lab_id: str):
 
 
 def create_lab(topology_yaml: str, title: str = "agentic-ni-lab") -> str:
-    """トポロジーYAMLからCMLラボを作成・起動する。
+    """トポロジーYAMLからCMLラボをインポートする（起動はしない）。
 
-    YAML文字列をCMLにインポートし、ラボを起動する。
-    ノードの起動完了は wait_for_nodes_ready() で別途待機すること。
+    同名のラボが既に存在する場合は事前に停止・削除してからインポートする。
+    ノードへのコンフィグ投入後に start_lab() を呼び出してラボを起動すること。
+    Day-0 コンフィグを正しく適用するため、start前にコンフィグを設定する必要がある。
 
     Args:
         topology_yaml: CML形式のトポロジー定義（YAML文字列）。
-        title: CML上でのラボ名。
+        title: CML上でのラボ名。同名ラボが存在する場合は削除される。
 
     Returns:
         str: 作成されたラボのID。
 
     Raises:
         EnvironmentError: CML接続情報が未設定の場合。
-        Exception: ラボのインポートまたは起動に失敗した場合。
+        Exception: ラボのインポートに失敗した場合。
     """
     client = _get_client()
-    lab = client.import_lab(topology=topology_yaml, title=title)
-    lab.start()
+
+    # 同名ラボが既に存在する場合はすべて削除する
+    for existing_lab in client.all_labs():
+        if existing_lab.title == title:
+            if existing_lab.is_active():
+                existing_lab.stop()
+            existing_lab.remove()
+
+    patched_yaml = _patch_topology_yaml(topology_yaml)
+    lab = client.import_lab(topology=patched_yaml, title=title)
     return lab.id
+
+
+def start_lab(lab_id: str) -> None:
+    """指定したラボを起動する。
+
+    コンフィグ投入（push_config）の後に呼び出すこと。
+
+    Args:
+        lab_id: 起動対象ラボのID。
+
+    Raises:
+        KeyError: lab_id が存在しない場合。
+    """
+    client = _get_client()
+    lab = _get_lab(client, lab_id)
+    lab.start()
 
 
 def delete_lab(lab_id: str) -> None:

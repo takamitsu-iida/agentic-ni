@@ -267,6 +267,7 @@ class TestDeploy:
 
         with patch("agentic_ni.tools.cml_tools.create_lab", return_value="lab-001") as mcreate, \
              patch("agentic_ni.tools.cml_tools.push_config") as mpush, \
+             patch("agentic_ni.tools.cml_tools.start_lab") as mstart, \
              patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=True), \
              patch("agentic_ni.tools.cml_tools.delete_lab"):
             result = _deploy(state)
@@ -274,12 +275,14 @@ class TestDeploy:
         assert result == "lab-001"
         mcreate.assert_called_once_with(_SAMPLE_TOPOLOGY)
         assert mpush.call_count == 2
+        mstart.assert_called_once_with("lab-001")
 
     def test_raises_when_nodes_not_ready(self):
         state = _base_state()
 
         with patch("agentic_ni.tools.cml_tools.create_lab", return_value="lab-001"), \
              patch("agentic_ni.tools.cml_tools.push_config"), \
+             patch("agentic_ni.tools.cml_tools.start_lab"), \
              patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=False), \
              patch("agentic_ni.tools.cml_tools.delete_lab"):
             with pytest.raises(RuntimeError, match="起動しませんでした"):
@@ -290,6 +293,7 @@ class TestDeploy:
 
         with patch("agentic_ni.tools.cml_tools.create_lab", return_value="new-lab"), \
              patch("agentic_ni.tools.cml_tools.push_config"), \
+             patch("agentic_ni.tools.cml_tools.start_lab"), \
              patch("agentic_ni.tools.cml_tools.wait_for_nodes_ready", return_value=True), \
              patch("agentic_ni.tools.cml_tools.delete_lab") as mdelete:
             _deploy(state)
@@ -404,4 +408,4 @@ class TestValidatorRun:
 
             run(_base_state())
 
-        mock_llm.with_structured_output.assert_any_call(TestPlan)
+        mock_llm.with_structured_output.assert_any_call(TestPlan, method="function_calling")
