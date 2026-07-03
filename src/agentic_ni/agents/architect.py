@@ -22,15 +22,26 @@ from agentic_ni.state import AgentState
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
+class DeviceConfig(BaseModel):
+    """1台分の機器コンフィグ。dict[str, str] は LLM の JSON schema で扱いにくいためリスト形式で受け取る。"""
+
+    device_name: str = Field(
+        description="ノードの label と一致するデバイス名（例: 'R1', 'R2'）。"
+    )
+    config_text: str = Field(
+        description="デバイスの設定テキスト（IOS 形式）。"
+    )
+
+
 class DesignOutput(BaseModel):
     """設計エージェントの構造化出力スキーマ。"""
 
     topology_yaml: str = Field(
         description="CMLに読み込ませるトポロジー定義（YAML文字列）。"
     )
-    device_configs: dict[str, str] = Field(
-        description="機器名をキー、コンフィグテキストを値とするマッピング。"
-        "キーはトポロジーYAML内のノードlabelと一致させること。"
+    device_configs: list[DeviceConfig] = Field(
+        description="機器ごとのコンフィグリスト。"
+        "各要素は device_name（ノードlabelと一致）と config_text を持つ。"
     )
     design_rationale: str = Field(
         description="設計意図・選択理由の簡潔な説明（ログ・デバッグ用）。"
@@ -119,7 +130,7 @@ def run(state: AgentState) -> dict[str, Any]:
 
     return {
         "topology_yaml": result.topology_yaml,
-        "device_configs": result.device_configs,
+        "device_configs": {dc.device_name: dc.config_text for dc in result.device_configs},
         # 修正設計を出力したらエラーログをクリア（次の検証で上書きされる）
         "error_log": "",
     }

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agentic_ni.agents.architect import DesignOutput, _build_messages, run
+from agentic_ni.agents.architect import DesignOutput, DeviceConfig, _build_messages, run
 from agentic_ni.state import AgentState
 
 
@@ -59,7 +59,10 @@ _SAMPLE_CONFIGS = {
 
 _SAMPLE_DESIGN_OUTPUT = DesignOutput(
     topology_yaml=_SAMPLE_TOPOLOGY_YAML,
-    device_configs=_SAMPLE_CONFIGS,
+    device_configs=[
+        DeviceConfig(device_name="R1", config_text=_SAMPLE_CONFIGS["R1"]),
+        DeviceConfig(device_name="R2", config_text=_SAMPLE_CONFIGS["R2"]),
+    ],
     design_rationale="R1-R2間をOSPFエリア0で接続。10.0.0.0/30を使用。",
 )
 
@@ -88,20 +91,21 @@ class TestDesignOutput:
     def test_valid_schema_creation(self):
         output = DesignOutput(
             topology_yaml="lab:\n  title: test\n",
-            device_configs={"R1": "hostname R1\n"},
+            device_configs=[DeviceConfig(device_name="R1", config_text="hostname R1\n")],
             design_rationale="テスト設計",
         )
         assert output.topology_yaml == "lab:\n  title: test\n"
-        assert output.device_configs["R1"] == "hostname R1\n"
+        assert output.device_configs[0].device_name == "R1"
+        assert output.device_configs[0].config_text == "hostname R1\n"
         assert output.design_rationale == "テスト設計"
 
     def test_device_configs_can_be_empty(self):
         output = DesignOutput(
             topology_yaml="lab:\n  title: test\n",
-            device_configs={},
+            device_configs=[],
             design_rationale="空の設計",
         )
-        assert output.device_configs == {}
+        assert output.device_configs == []
 
     def test_schema_has_expected_fields(self):
         fields = DesignOutput.model_fields
@@ -208,7 +212,7 @@ class TestArchitectRun:
         with patch("agentic_ni.agents.architect.get_llm", return_value=mock_llm):
             run(state)
 
-        mock_llm.with_structured_output.assert_called_once_with(DesignOutput)
+        mock_llm.with_structured_output.assert_called_once_with(DesignOutput, method="function_calling")
 
     def test_run_zero_design_sends_correct_message_count(self):
         """LLMに渡すメッセージが2件（system + user）であること。"""

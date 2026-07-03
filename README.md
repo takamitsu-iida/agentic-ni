@@ -421,7 +421,7 @@ git clone https://github.com/takamitsu-iida/agentic-ni.git
 cd agentic-ni
 ```
 
-依存パッケージをインストールします。
+依存パッケージをインストールします。このとき `agentic-ni` コマンドもPython仮想環境にインストールされます。
 
 ```bash
 uv sync
@@ -667,105 +667,6 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 
 **完了条件**: 最終レポート（成功またはエスカレーション）が出力される。
 
-```
-iida@s400win:~/git/agentic-ni$ agentic-ni
-SSL Verification disabled
-SSL Verification disabled
-SSL Verification disabled
-Traceback (most recent call last):
-  File "/home/iida/git/agentic-ni/.venv/bin/agentic-ni", line 10, in <module>
-    sys.exit(main())
-             ~~~~^^
-  File "/home/iida/git/agentic-ni/src/agentic_ni/graph.py", line 259, in main
-    result = app.invoke(initial_state(requirement))
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py", line 3928, in invoke
-    for chunk in self.stream(
-                 ~~~~~~~~~~~^
-        input,
-        ^^^^^^
-    ...<11 lines>...
-        **kwargs,
-        ^^^^^^^^^
-    ):
-    ^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py", line 2982, in stream
-    for _ in runner.tick(
-             ~~~~~~~~~~~^
-        [t for t in loop.tasks.values() if not t.writes],
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ...<2 lines>...
-        schedule_task=loop.accept_push,
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ):
-    ^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py", line 207, in tick
-    run_with_retry(
-    ~~~~~~~~~~~~~~^
-        t,
-        ^^
-    ...<10 lines>...
-        },
-        ^^
-    )
-    ^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py", line 617, in run_with_retry
-    return task.proc.invoke(task.input, config)
-           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py", line 684, in invoke
-    input = context.run(step.invoke, input, config, **kwargs)
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py", line 426, in invoke
-    ret = self.func(*args, **kwargs)
-  File "/home/iida/git/agentic-ni/src/agentic_ni/graph.py", line 31, in architect_node
-    return architect.run(state)
-           ~~~~~~~~~~~~~^^^^^^^
-  File "/home/iida/git/agentic-ni/src/agentic_ni/agents/architect.py", line 118, in run
-    result: DesignOutput = structured_llm.invoke(messages)
-                           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 3444, in invoke
-    input_ = context.run(step.invoke, input_, config)
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/output_parsers/base.py", line 211, in invoke
-    return self._call_with_config(
-           ~~~~~~~~~~~~~~~~~~~~~~^
-        lambda inner_input: self.parse_result(
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ...<4 lines>...
-        run_type="parser",
-        ^^^^^^^^^^^^^^^^^^
-    )
-    ^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 2289, in _call_with_config
-    context.run(
-    ~~~~~~~~~~~^
-        call_func_with_variable_args,  # type: ignore[arg-type]
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ...<4 lines>...
-        **kwargs,
-        ^^^^^^^^^
-    ),
-    ^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/runnables/config.py", line 526, in call_func_with_variable_args
-    return func(input, **kwargs)  # type: ignore[call-arg]
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/output_parsers/base.py", line 212, in <lambda>
-    lambda inner_input: self.parse_result(
-                        ~~~~~~~~~~~~~~~~~^
-        [ChatGeneration(message=inner_input)]
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ),
-    ^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/langchain_core/output_parsers/openai_tools.py", line 368, in parse_result
-    pydantic_objects.append(tool(**res["args"]))
-                            ~~~~^^^^^^^^^^^^^^^
-  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/pydantic/main.py", line 263, in __init__
-    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
-pydantic_core._pydantic_core.ValidationError: 2 validation errors for DesignOutput
-device_configs
-  Field required [type=missing, input_value={'topology_yaml': 'lab:\n...修正を確認。"}'}, input_type=dict]
-    For further information visit https://errors.pydantic.dev/2.13/v/missing
-design_rationale
-  Field required [type=missing, input_value={'topology_yaml': 'lab:\n...修正を確認。"}'}, input_type=dict]
-    For further information visit https://errors.pydantic.dev/2.13/v/missing
-During task with name 'architect' and id 'a643e7f1-7179-e59b-051c-c321d83dfc54'
-```
 
 ---
 
