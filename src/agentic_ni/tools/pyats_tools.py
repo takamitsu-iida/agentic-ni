@@ -65,10 +65,13 @@ def build_testbed(lab_id: str, device_configs: dict[str, str]) -> str:
     CMLのコンソールサーバー接続情報を含むテストベッドを取得する。
     pyATS のインストールは不要（virl2_client のみ使用）。
 
+    生成されたYAMLには terminal_server の認証情報がプレースホルダー
+    ("change_me") になっている場合があるため、.env の CML 認証情報で上書きする。
+    また pyATS が servers: セクションでプロキシを探すため、同情報を追加する。
+
     Args:
         lab_id: テストベッドを生成する対象ラボのID。
         device_configs: 機器名 → コンフィグテキストのマッピング。
-                        デバイスOSの推定に使用する（未使用の場合も許容）。
 
     Returns:
         str: pyATS テストベッド YAML 文字列。
@@ -77,20 +80,33 @@ def build_testbed(lab_id: str, device_configs: dict[str, str]) -> str:
         EnvironmentError: CML接続情報が未設定の場合。
         KeyError: lab_id が存在しない場合。
     """
-    import sys
-    # virl2_client は Phase 1 でインストール済み
+    import os
+    import yaml as _yaml
     from agentic_ni.tools.cml_tools import _get_client, _get_lab
 
     client = _get_client()
     lab = _get_lab(client, lab_id)
     testbed_yaml = lab.get_pyats_testbed()
 
-    # デバッグ: 生成された testbed YAML を stderr に出力
-    print("\n--- [DEBUG] Generated testbed YAML ---", file=sys.stderr)
-    print(testbed_yaml, file=sys.stderr)
-    print("--- [DEBUG] End of testbed YAML ---\n", file=sys.stderr)
+    # --- testbed YAML のパッチ処理 ---
+    data = _yaml.safe_load(testbed_yaml)
+    cml_username = os.getenv("CML_USERNAME", "")
+    cml_password = os.getenv("CML_PASSWORD", "")
 
-    return testbed_yaml
+    ts_device = data.get("devices", {}).get("terminal_server")
+    if ts_device:
+        # 1) change_me の認証情報を実際の CML 認証情報で上書き
+        ts_creds = ts_device.setdefault("credentials", {})
+        if not ts_creds.get("default") or ts_creds["default"].get("username") == "change_me":
+            ts_creds["default"] = {
+                "username": cml_username,
+                "password": cml_password,
+            }
+
+        # 2) pyATS が proxy を servers: セクションで探すため、同内容を追加
+        data.setdefault("servers", {})["terminal_server"] = ts_device
+
+    return _yaml.dump(data, default_flow_style=False, allow_unicode=True)
 
 
 def run_show_command(testbed_yaml: str, device_name: str, command: str) -> dict:
