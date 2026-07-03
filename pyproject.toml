@@ -1,0 +1,45 @@
+[project]
+name = "agentic-ni"
+version = "0.1.0"
+description = "AI駆動型ネットワーク設計検証 自律エージェントシステム"
+readme = "README.md"
+requires-python = ">=3.12"
+# コア依存: Phase 1-3 で必要なもの
+dependencies = [
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "langchain-anthropic>=0.3",
+    "langchain-ollama>=0.2",
+    "virl2-client>=2.7",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+]
+
+# オプション依存: Phase 4 (pyATS/Genie) で追加インストール
+# uv sync --extra network で有効化
+[project.optional-dependencies]
+network = [
+    "pyats>=24.0",
+    "genie>=24.0",
+]
+
+[project.scripts]
+agentic-ni = "agentic_ni.graph:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentic_ni"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
