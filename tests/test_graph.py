@@ -8,6 +8,7 @@ import pytest
 
 from agentic_ni.graph import MAX_RETRIES, build_graph, compile_graph, should_continue
 from agentic_ni.state import AgentState
+from agentic_ni.agents.architect import DeviceConfig
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +67,18 @@ def test_should_continue_returns_escalate_when_max_retries():
     assert should_continue(state) == "escalate"
 
 
+def test_should_continue_escalates_immediately_on_tool_errors():
+    """テスト実行エラー（インフラエラー）の場合はリトライせず即時エスカレーション。"""
+    state = _base_state(
+        test_results=[
+            {"test": "ospf", "result": "FAIL", "detail": "テスト実行エラー: SchemaError"},
+            {"test": "ping",  "result": "FAIL", "detail": "テスト実行エラー: ConnectionFailed"},
+        ],
+        retry_count=1,
+    )
+    assert should_continue(state) == "escalate"
+
+
 def test_should_continue_returns_redesign_when_no_results():
     """テスト結果が空の場合は redesign（初回ループ）。"""
     state = _base_state(test_results=[], retry_count=0)
@@ -112,12 +125,13 @@ def test_stub_graph_escalates_after_max_retries():
 
     mock_design = DesignOutput(
         topology_yaml="lab:\n  title: test\n",
-        device_configs={"R1": "hostname R1\n"},
+        device_configs=[DeviceConfig(device_name="R1", config_text="hostname R1\n")],
         design_rationale="テスト",
     )
+
     mock_plan = TestPlan(tests=[], rationale="テスト計画")
 
-    def make_structured_llm(model):
+    def make_structured_llm(model, **kwargs):
         m = MagicMock()
         if model is DesignOutput:
             m.invoke.return_value = mock_design
@@ -147,7 +161,7 @@ def test_stub_graph_completes_when_tests_pass():
 
     mock_design = DesignOutput(
         topology_yaml="lab:\n  title: test\n",
-        device_configs={"R1": "hostname R1\n"},
+        device_configs=[DeviceConfig(device_name="R1", config_text="hostname R1\n")],
         design_rationale="テスト",
     )
 

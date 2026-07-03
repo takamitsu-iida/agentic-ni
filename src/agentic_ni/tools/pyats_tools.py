@@ -95,16 +95,13 @@ def build_testbed(lab_id: str, device_configs: dict[str, str]) -> str:
 
     ts_device = data.get("devices", {}).get("terminal_server")
     if ts_device:
-        # 1) change_me の認証情報を実際の CML 認証情報で上書き
+        # change_me の認証情報を実際の CML 認証情報で上書き
         ts_creds = ts_device.setdefault("credentials", {})
         if not ts_creds.get("default") or ts_creds["default"].get("username") == "change_me":
             ts_creds["default"] = {
                 "username": cml_username,
                 "password": cml_password,
             }
-
-        # 2) pyATS が proxy を servers: セクションで探すため、同内容を追加
-        data.setdefault("servers", {})["terminal_server"] = ts_device
 
     return _yaml.dump(data, default_flow_style=False, allow_unicode=True)
 

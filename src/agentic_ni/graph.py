@@ -142,6 +142,17 @@ def should_continue(
     if test_results and all(r["result"] == "PASS" for r in test_results):
         return "complete"
 
+    # インフラ・ツールエラー（ネットワーク設計の問題ではない）は即時エスカレーション
+    if test_results and all(
+        "テスト実行エラー" in r.get("detail", "") for r in test_results
+    ):
+        return "escalate"
+
+    # デプロイ自体が失敗した場合も即時エスカレーション
+    error_log = state.get("error_log", "")
+    if error_log.startswith("デプロイ失敗:") and not test_results:
+        return "escalate"
+
     if state.get("retry_count", 0) >= MAX_RETRIES:
         return "escalate"
 

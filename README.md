@@ -681,38 +681,3 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
-```
-iida@s400win:~/git/agentic-ni$ agentic-ni
-# エスカレーションレポート
-
-**生成日時**: 2026-07-03 20:10:50
-
-## 要件
-R1とR2をOSPFで接続する
-
-## 概要
-- 試行回数: 5 回（上限: 5 回）
-- 自動修正での解決に失敗しました
-
-## 最終テスト結果
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| Verify that OSPF neighbors are established on R1. | ❌ FAIL | テスト実行エラー: SchemaUnsupportedKeyError: Unsupported keys: ['servers'] |
-| Verify that OSPF neighbors are established on R2. | ❌ FAIL | テスト実行エラー: SchemaUnsupportedKeyError: Unsupported keys: ['servers'] |
-| Verify connectivity from R1 to R2's Loopback interface to ensure OSPF routing. | ❌ FAIL | テスト実行エラー: SchemaUnsupportedKeyError: Unsupported keys: ['servers'] |
-| Verify connectivity from R2 to R1's Loopback interface to ensure OSPF routing. | ❌ FAIL | テスト実行エラー: SchemaUnsupportedKeyError: Unsupported keys: ['servers'] |
-
-## 最終エラーログ（AIの推論）
-## 根本原因
-テスト実行エラーはSchemaUnsupportedKeyError: Unsupported keys: ['servers']ですが、これがOSPFのネイバー形成や疎通とは直接関連しないため、OSPF設定そのものではなく、テストスクリプトや設定中の誤った構成が原因の可能性があります。
-
-## 修正依頼
-テストスクリプトを確認し、OSPF機能かその環境変数の設定に関するキー設定を見直してください。特に、'servers'という要素がどこで想定されているかを確認し、テスト実行環境に合った設定に修正する必要があります。
-
-## 推奨アクション
-自動修正の上限（5回）に達しました。以下を手動で確認してください:
-1. 要件の曖昧さや矛盾がないか確認する
-2. 最終エラーログを参考に手動でコンフィグを修正する
-3. CMLラボID `db015f0f-2351-4439-8dd1-457ba2cd32f4` で現状を確認する
-iida@s400win:~/git/agentic-ni$
-```
