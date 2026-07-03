@@ -681,3 +681,12 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
+
+```
+iida@s400win:~/git/agentic-ni$ agentic-ni
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+No details found in testbed for hostname terminal_server.
+Could not find details in testbed for server terminal_server.
+Could not find details in testbed for server terminal_server.
+```
