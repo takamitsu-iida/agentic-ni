@@ -681,3 +681,68 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
+---
+
+## デモンストレーション手順
+
+「設計 → デプロイ → 検証失敗 → 再設計 → 再検証 → 成功」というループを確実に再現するためのデモ用要件と手順を示します。
+
+### デモ用要件（推奨）
+
+以下の要件は、Loopbackアドレスの指定・pingの宛先IPの明示・OSPFへのアドバタイズなど、細かい条件が含まれるため LLM が最初の設計でミスしやすく、リトライループが自然に発生します。
+
+```
+R1とR2をOSPFエリア0で接続すること。
+それぞれにLoopbackインターフェースを設定し（R1: 1.1.1.1/32、R2: 2.2.2.2/32）、
+LoopbackアドレスをOSPFでアドバタイズすること。
+R1から 2.2.2.2 へpingが通り、R2から 1.1.1.1 へpingが通ること。
+```
+
+### デモの実行
+
+```bash
+agentic-ni
+```
+
+対話プロンプトで上記の要件を入力します。
+
+### 期待される動作フロー
+
+```
+1. 設計エージェント（1回目）
+   ↓ トポロジーYAML・コンフィグを生成
+2. 検証エージェント（1回目）
+   ↓ CMLにラボを作成してデプロイ
+   ↓ OSPFネイバー確認・ping確認を実行
+   ↓ FAIL（例: Loopbackへのpingが通らない、OSPFでアドバタイズされていない）
+   ↓ 原因推論 → error_log に格納
+3. 設計エージェント（2回目）
+   ↓ error_log を参照して差分修正
+4. 検証エージェント（2回目）
+   ↓ 既存ラボにコンフィグを更新・再起動
+   ↓ 全テストPASS
+5. 最終レポート出力
+   ↓ トポロジーYAML・機器コンフィグ・テスト結果をすべて含むレポート
+```
+
+### ログの確認
+
+実行中のルーター接続・コマンド実行ログは `logs/` ディレクトリに保存されます。
+
+```bash
+# 最新のログを確認
+ls -lt logs/
+cat logs/agentic-ni-*.log | tail -100
+
+# OSPFネイバーの確認コマンドのやり取りを抽出
+grep -A5 "show ip ospf neighbor" logs/agentic-ni-*.log
+```
+
+### MAX_RETRIES の調整
+
+デモで失敗ループをより長く見せたい場合や、素早く結果を出したい場合は `.env` で調整します。
+
+```dotenv
+# 最大リトライ回数（デフォルト: 5）
+MAX_RETRIES=3
+```

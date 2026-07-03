@@ -47,6 +47,13 @@ def report_node(state: AgentState) -> dict:
         for r in results
     )
 
+    # 機器コンフィグのセクション
+    device_configs: dict[str, str] = state.get("device_configs", {})
+    config_section = "\n\n".join(
+        f"### {dev}\n```\n{cfg.strip()}\n```"
+        for dev, cfg in device_configs.items()
+    ) or "(コンフィグなし)"
+
     report = (
         f"# 検証成功レポート\n\n"
         f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
@@ -54,13 +61,17 @@ def report_node(state: AgentState) -> dict:
         f"## 概要\n"
         f"- 試行回数: {state.get('retry_count', 0)} 回\n"
         f"- PASSテスト: {len(passed)} 件\n"
-        f"- FAILテスト: {len(failed)} 件\n\n"
-        f"## テスト結果\n"
+        f"- FAILテスト: {len(failed)} 件\n"
+        f"- ラボID: {state.get('lab_id', '(不明)')}\n\n"
+        f"## ネットワーク設計\n\n"
+        f"### トポロジー定義（CML YAML）\n"
+        f"```yaml\n{state.get('topology_yaml', '(なし)').strip()}\n```\n\n"
+        f"### 機器コンフィグ\n\n"
+        f"{config_section}\n\n"
+        f"## 検証テスト結果\n\n"
         f"| テスト名 | 結果 | 詳細 |\n"
         f"|---|---|---|\n"
         f"{result_lines}\n\n"
-        f"## デプロイ情報\n"
-        f"- ラボID: {state.get('lab_id', '(不明)')}\n\n"
         f"すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。"
     )
     return {"final_report": report}
@@ -74,25 +85,38 @@ def escalate_node(state: AgentState) -> dict:
         for r in results
     ) or "| (テスト未実施) | - | - |"
 
+    # 機器コンフィグのセクション
+    device_configs: dict[str, str] = state.get("device_configs", {})
+    config_section = "\n\n".join(
+        f"### {dev}\n```\n{cfg.strip()}\n```"
+        for dev, cfg in device_configs.items()
+    ) or "(コンフィグなし)"
+
     report = (
         f"# エスカレーションレポート\n\n"
         f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         f"## 要件\n{state.get('requirement', '')}\n\n"
         f"## 概要\n"
         f"- 試行回数: {state.get('retry_count', 0)} 回（上限: {MAX_RETRIES} 回）\n"
-        f"- 自動修正での解決に失敗しました\n\n"
-        f"## 最終テスト結果\n"
+        f"- 自動修正での解決に失敗しました\n"
+        f"- ラボID: {state.get('lab_id', '(不明)')}\n\n"
+        f"## 最終ネットワーク設計\n\n"
+        f"### トポロジー定義（CML YAML）\n"
+        f"```yaml\n{state.get('topology_yaml', '(なし)').strip()}\n```\n\n"
+        f"### 機器コンフィグ\n\n"
+        f"{config_section}\n\n"
+        f"## 最終テスト結果\n\n"
         f"| テスト名 | 結果 | 詳細 |\n"
         f"|---|---|---|\n"
         f"{result_lines}\n\n"
-        f"## 最終エラーログ（AIの推論）\n"
+        f"## AIの推論（失敗原因）\n"
         f"{state.get('error_log', '(なし)')}\n\n"
         f"## 推奨アクション\n"
         f"自動修正の上限（{MAX_RETRIES}回）に達しました。"
         f"以下を手動で確認してください:\n"
-        f"1. 要件の曖昧さや矛盾がないか確認する\n"
-        f"2. 最終エラーログを参考に手動でコンフィグを修正する\n"
-        f"3. CMLラボID `{state.get('lab_id', '(不明)')}` で現状を確認する"
+        f"1. 上記の最終コンフィグと失敗原因を参考に手動でコンフィグを修正する\n"
+        f"2. CMLラボ `{state.get('lab_id', '(不明)')}` で現状を確認する\n"
+        f"3. 要件の曖昧さや矛盾がないか見直す"
     )
     return {"final_report": report}
 
