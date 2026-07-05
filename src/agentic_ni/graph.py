@@ -320,30 +320,29 @@ def main() -> None:
     # 引数なし or --help / -h: ヘルプを表示して終了
     if not args or "--help" in args or "-h" in args:
         print(
-            "使い方: agentic-ni [オプション]\n"
+            "使い方: agentic-ni <プロンプトセット名> [オプション]\n"
             "\n"
             "要件はプロンプトセット内の requirement.md に記載してください。\n"
             "\n"
             "オプション:\n"
-            "  --prompt-set <名前>  使用するプロンプトセットを指定する（デフォルト: demo）\n"
-            "  --list-sets          利用可能なプロンプトセット一覧を表示して終了する\n"
+            "  --list               利用可能なプロンプトセット一覧を表示して終了する\n"
             "  --use-rag            修正設計時に過去の成功事例をプロンプトに追加する（要 chromadb）\n"
             "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
             "  -i / --interactive   Human-in-the-Loop モードで実行する\n"
             "  -h / --help          このヘルプを表示して終了する\n"
             "\n"
             "例:\n"
-            "  agentic-ni                              # demo セットの要件で実行\n"
-            "  agentic-ni --prompt-set ospf_l3vpn      # ospf_l3vpn セットの要件で実行\n"
-            "  agentic-ni --use-rag                    # RAGを有効にして実行\n"
-            "  agentic-ni -i                           # Human-in-the-Loop モードで実行\n"
-            "  agentic-ni --list-sets\n"
+            "  agentic-ni demo                  # demo セットの要件で実行\n"
+            "  agentic-ni ospf_l3vpn            # ospf_l3vpn セットの要件で実行\n"
+            "  agentic-ni demo --use-rag        # RAGを有効にして実行\n"
+            "  agentic-ni demo -i               # Human-in-the-Loop モードで実行\n"
+            "  agentic-ni --list\n"
             "  agentic-ni --rag-stats"
         )
         return
 
-    # --list-sets: 利用可能なプロンプトセット一覧を表示して終了
-    if "--list-sets" in args:
+    # --list: 利用可能なプロンプトセット一覧を表示して終了
+    if "--list" in args:
         from agentic_ni.agents.architect import list_prompt_sets
         sets = list_prompt_sets()
         print("利用可能なプロンプトセット:")
@@ -363,16 +362,16 @@ def main() -> None:
     interactive = "--interactive" in args or "-i" in args
     use_rag = "--use-rag" in args
 
-    # --prompt-set <name> の解析
-    prompt_set = "demo"
-    if "--prompt-set" in args:
-        idx = args.index("--prompt-set")
-        if idx + 1 < len(args):
-            prompt_set = args[idx + 1]
-            args = args[:idx] + args[idx + 2:]
-        else:
-            print("エラー: --prompt-set の後にセット名を指定してください。", file=sys.stderr)
-            sys.exit(1)
+    # 位置引数（フラグ以外）= プロンプトセット名
+    positional = [a for a in args if not a.startswith("-")]
+    if not positional:
+        print("エラー: プロンプトセット名を指定してください。", file=sys.stderr)
+        print("  利用可能なセット確認: agentic-ni --list", file=sys.stderr)
+        sys.exit(1)
+    if len(positional) > 1:
+        print(f"エラー: 引数が多すぎます: {positional}", file=sys.stderr)
+        sys.exit(1)
+    prompt_set = positional[0]
 
     # 要件はプロンプトセットの requirement.md から読み込む
     try:

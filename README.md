@@ -697,7 +697,7 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 ### 基本構文
 
 ```bash
-agentic-ni [オプション]
+agentic-ni <プロンプトセット名> [オプション]
 ```
 
 引数なしで実行するとヘルプを表示します。`-h` / `--help` でも同様です。
@@ -715,8 +715,7 @@ CLI引数として要件テキストを渡すことはできません。
 
 | オプション | 説明 |
 |---|---|
-| `--prompt-set <名前>` | 使用するプロンプトセットを指定する（デフォルト: `demo`） |
-| `--list-sets` | 利用可能なプロンプトセット一覧を表示して終了する |
+| `--list` | 利用可能なプロンプトセット一覧を表示して終了する |
 | `--use-rag` | 修正設計時に過去の成功事例をプロンプトに追加する（要 `chromadb`） |
 | `--rag-stats` | RAGストアの保存件数と保存場所を表示して終了する |
 | `-i` / `--interactive` | Human-in-the-Loop モードで実行する（最終レポートを人間が承認/却下） |
@@ -725,23 +724,23 @@ CLI引数として要件テキストを渡すことはできません。
 ### 使用例
 
 ```bash
-# demo セットの要件で実行（引数なしでOK）
-agentic-ni
+# demo セットの要件で実行
+agentic-ni demo
 
 # 利用可能なプロンプトセット一覧を表示
-agentic-ni --list-sets
+agentic-ni --list
 
 # プロンプトセットを指定して実行（そのセットの requirement.md が使われる）
-agentic-ni --prompt-set ospf_l3vpn
+agentic-ni static
 
 # Human-in-the-Loop モードで実行（最終レポートを承認/却下）
-agentic-ni -i
+agentic-ni demo -i
 
 # プロンプトセット指定 + インタラクティブモード
-agentic-ni --prompt-set ospf_l3vpn -i
+agentic-ni static -i
 
 # RAGを有効にして実行（成功時にエラー→成功設計の対応を自動保存）
-agentic-ni --use-rag
+agentic-ni demo --use-rag
 
 # RAGストアの統計確認
 agentic-ni --rag-stats
@@ -773,7 +772,7 @@ cp src/agentic_ni/prompts/demo/requirement.md src/agentic_ni/prompts/bgp_design/
 # requirement.md を編集してBGP要件を記載する
 
 # 追加後に確認
-agentic-ni --list-sets
+agentic-ni --list
 # 利用可能なプロンプトセット:
 #   - bgp_design
 #   - demo

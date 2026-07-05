@@ -73,10 +73,10 @@ def _load_system_prompt(prompt_set: str = "demo") -> str:
 
 
 def list_prompt_sets() -> list[str]:
-    """利用可能なプロンプトセット一覧を返す。"""
+    """利用可能なプロンプトセット一覧を返す。requirement.md を持つディレクトリを対象とする。"""
     return sorted(
         d.name for d in _PROMPTS_DIR.iterdir()
-        if d.is_dir() and (d / "architect_system.md").exists()
+        if d.is_dir() and (d / "requirement.md").exists()
     )
 
 
