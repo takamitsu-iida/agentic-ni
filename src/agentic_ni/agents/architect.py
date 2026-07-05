@@ -141,6 +141,9 @@ def run(state: AgentState) -> dict[str, Any]:
     messages = _build_messages(state)
     result: DesignOutput = structured_llm.invoke(messages)
 
+    if state.get("error_log"):
+        print(f"  【設計方針】 {result.design_rationale}", flush=True)
+
     return {
         "topology_yaml": result.topology_yaml,
         "device_configs": {dc.device_name: dc.config_text for dc in result.device_configs},

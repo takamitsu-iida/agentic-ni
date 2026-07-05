@@ -302,6 +302,10 @@ def run(state: AgentState) -> dict[str, Any]:
             f"## 修正依頼\n{analysis.suggestion}"
         )
         print(f"  [4/4] 分析完了", flush=True)
+        print(f"", flush=True)
+        print(f"  『根本原因』 {analysis.root_cause}", flush=True)
+        print(f"  『修正依頼』 {analysis.suggestion}", flush=True)
+        print(f"", flush=True)
     else:
         print(f"  [4/4] 全テスト PASS", flush=True)
 
