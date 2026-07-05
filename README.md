@@ -886,3 +886,199 @@ grep -A5 "show ip ospf neighbor" logs/agentic-ni-*.log
 # 最大リトライ回数（デフォルト: 5）
 MAX_RETRIES=3
 ```
+
+
+
+(agentic-ni) iida@s400win:~/git/agentic-ni$ agentic-ni demo
+プロンプトセット: demo
+
+【要件】
+  ## ネットワーク構成
+  - R1とR2を直接接続する（OSPFエリア0）
+  - R1-R2間リンク: 10.0.12.0/30（R1: 10.0.12.1、R2: 10.0.12.2）
+
+  ## Loopbackインターフェース
+  - R1: Loopback0 = 1.1.1.1/32
+  - R2: Loopback0 = 2.2.2.2/32
+
+  ## OSPFの設定
+  - OSPFエリア0で全インターフェース（Loopback含む）を接続する
+  - Router-IDはLoopback0のアドレスを使用する
+
+  ## iBGPの設定
+  - AS番号: 65000
+  - R1とR2の間でiBGPピアを設定する
+  - BGPピアアドレスはLoopback0のアドレスを使用すること（R1: 1.1.1.1 ↔ R2: 2.2.2.2）
+
+  ## 必須検証項目
+  - R1とR2のOSPFネイバーが確立していること
+  - R1とR2のiBGPセッションが確立していること
+  - R1から 2.2.2.2（R2のLoopback）へpingが通ること
+  - R2から 1.1.1.1（R1のLoopback）へpingが通ること
+
+処理を開始します...
+
+
+============================================================
+[第1回 / 上限5回]  設計エージェント  (初回設計)
+============================================================
+  >>> LLM にトポロジーとコンフィグを生成させています...
+  <<< 設計完了
+
+[第1回 / 上限5回]  検証エージェント  開始
+  [1/4] CML にデプロイ中...
+    ラボをインポート中...
+  [1/4] デプロイ失敗: Client error - {"Input validation failed": [{"location": ["body", "nodes", 0, "interfaces", 1, "slot"], "type": "greater_than_equal", "message": "Input should be greater than or equal to 0"}, {"location": ["body", "nodes", 1, "interfaces", 1, "slot"], "type": "greater_than_equal", "message": "Input should be greater than or equal to 0"}]}
+
+  >>> 上限に達しました。エスカレーションレポートを生成しています...
+# エスカレーションレポート
+
+**生成日時**: 2026-07-05 18:26:49
+
+## 要件
+## ネットワーク構成
+- R1とR2を直接接続する（OSPFエリア0）
+- R1-R2間リンク: 10.0.12.0/30（R1: 10.0.12.1、R2: 10.0.12.2）
+
+## Loopbackインターフェース
+- R1: Loopback0 = 1.1.1.1/32
+- R2: Loopback0 = 2.2.2.2/32
+
+## OSPFの設定
+- OSPFエリア0で全インターフェース（Loopback含む）を接続する
+- Router-IDはLoopback0のアドレスを使用する
+
+## iBGPの設定
+- AS番号: 65000
+- R1とR2の間でiBGPピアを設定する
+- BGPピアアドレスはLoopback0のアドレスを使用すること（R1: 1.1.1.1 ↔ R2: 2.2.2.2）
+
+## 必須検証項目
+- R1とR2のOSPFネイバーが確立していること
+- R1とR2のiBGPセッションが確立していること
+- R1から 2.2.2.2（R2のLoopback）へpingが通ること
+- R2から 1.1.1.1（R1のLoopback）へpingが通ること
+
+## 概要
+- 試行回数: 1 回（上限: 5 回）
+- 自動修正での解決に失敗しました
+- ラボID:
+
+## 最終ネットワーク設計
+
+### トポロジー定義（CML YAML）
+```yaml
+lab:
+  title: agentic-ni-demo
+  description: "Direct connection between R1 and R2 with OSPF and iBGP configuration."
+  notes: ""
+  timestamp: 0
+  version: "0.1.0"
+
+nodes:
+  - id: "n0"
+    label: "R1"
+    node_definition: "iosv"
+    x: -200
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "Loopback0"
+        slot: -1
+        type: loopback
+
+  - id: "n1"
+    label: "R2"
+    node_definition: "iosv"
+    x: 200
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "Loopback0"
+        slot: -1
+        type: loopback
+
+links:
+  - id: "l0"
+    n1: "n0"
+    i1: "i0"
+    n2: "n1"
+    i2: "i0"
+    label: "l0"
+```
+
+### 機器コンフィグ
+
+### R1
+```
+hostname R1
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.1 255.255.255.252
+ no shutdown
+!
+interface Loopback0
+ ip address 1.1.1.1 255.255.255.255
+!
+router ospf 1
+ router-id 1.1.1.1
+ network 10.0.12.0 0.0.0.3 area 0
+ network 1.1.1.1 0.0.0.0 area 0
+!
+router bgp 65000
+ bgp log-neighbor-changes
+ neighbor 2.2.2.2 remote-as 65000
+ update-source Loopback0
+!
+end
+```
+
+### R2
+```
+hostname R2
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.2 255.255.255.252
+ no shutdown
+!
+interface Loopback0
+ ip address 2.2.2.2 255.255.255.255
+!
+router ospf 1
+ router-id 2.2.2.2
+ network 10.0.12.0 0.0.0.3 area 0
+ network 2.2.2.2 0.0.0.0 area 0
+!
+router bgp 65000
+ bgp log-neighbor-changes
+ neighbor 1.1.1.1 remote-as 65000
+ update-source Loopback0
+!
+end
+```
+
+## 最終テスト結果
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| (テスト未実施) | - | - |
+
+## AIの推論（失敗原因）
+デプロイ失敗: APIError: Client error - {"Input validation failed": [{"location": ["body", "nodes", 0, "interfaces", 1, "slot"], "type": "greater_than_equal", "message": "Input should be greater than or equal to 0"}, {"location": ["body", "nodes", 1, "interfaces", 1, "slot"], "type": "greater_than_equal", "message": "Input should be greater than or equal to 0"}]}
+
+## 推奨アクション
+自動修正の上限（5回）に達しました。以下を手動で確認してください:
+1. 上記の最終コンフィグと失敗原因を参考に手動でコンフィグを修正する
+2. CMLラボ `` で現状を確認する
+3. 要件の曖昧さや矛盾がないか見直す
+(agentic-ni) iida@s400win:~/git/agentic-ni$
