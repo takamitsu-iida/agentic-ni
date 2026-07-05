@@ -71,12 +71,14 @@ agentic-ni/
        │   └── rag_tools.py     # ベクトルRAG（ChromaDB）ラッパー
 │       │
 │       └── prompts/
-│          ├── default/                 # デフォルトプロンプトセット
-│          │   ├── architect_system.md
-│          │   └── validator_system.md
-│          └── <セット名>/              # 任意で追加可能（例: ospf_l3vpn/）
-│              ├── architect_system.md
-│              └── validator_system.md
+          ├── architect_system.md      # 設計エージェント共通プロンプト（フォールバック）
+          ├── validator_system.md      # 検証エージェント共通プロンプト（フォールバック）
+          ├── demo/                     # デフォルトプロンプトセット（デモ用）
+          │   └── requirement.md        # 実行する要件テキスト
+          └── <セット名>/              # 任意で追加可能（例: ospf_l3vpn/）
+              ├── requirement.md        # 必須: 実行する要件テキスト
+              ├── architect_system.md  # 任意: なければ共通プロンプトを使用
+              └── validator_system.md  # 任意: なければ共通プロンプトを使用
 │
 └── tests/
     ├── __init__.py
@@ -695,41 +697,51 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 ### 基本構文
 
 ```bash
-agentic-ni [オプション] [要件テキスト]
+agentic-ni [オプション]
 ```
 
-要件テキストを省略した場合は `"R1とR2をOSPFで接続する"` がデフォルト値として使用されます。
+引数なしで実行するとヘルプを表示します。`-h` / `--help` でも同様です。
+
+```bash
+agentic-ni
+# または
+agentic-ni --help
+```
+
+**要件はプロンプトセット内の `requirement.md` に記載します。**
+CLI引数として要件テキストを渡すことはできません。
 
 ### オプション一覧
 
 | オプション | 説明 |
 |---|---|
-| `--prompt-set <名前>` | 使用するプロンプトセットを指定する（デフォルト: `default`） |
+| `--prompt-set <名前>` | 使用するプロンプトセットを指定する（デフォルト: `demo`） |
 | `--list-sets` | 利用可能なプロンプトセット一覧を表示して終了する |
 | `--use-rag` | 修正設計時に過去の成功事例をプロンプトに追加する（要 `chromadb`） |
 | `--rag-stats` | RAGストアの保存件数と保存場所を表示して終了する |
 | `-i` / `--interactive` | Human-in-the-Loop モードで実行する（最終レポートを人間が承認/却下） |
+| `-h` / `--help` | ヘルプを表示して終了する |
 
 ### 使用例
 
 ```bash
-# デフォルトプロンプトセットで実行
-agentic-ni "R1とR2をOSPFで接続する"
+# demo セットの要件で実行（引数なしでOK）
+agentic-ni
 
 # 利用可能なプロンプトセット一覧を表示
 agentic-ni --list-sets
 
-# プロンプトセットを指定して実行
-agentic-ni --prompt-set ospf_l3vpn "R1とR2をOSPFエリア0で接続する"
+# プロンプトセットを指定して実行（そのセットの requirement.md が使われる）
+agentic-ni --prompt-set ospf_l3vpn
 
 # Human-in-the-Loop モードで実行（最終レポートを承認/却下）
-agentic-ni -i "R1とR2をOSPFで接続する"
+agentic-ni -i
 
 # プロンプトセット指定 + インタラクティブモード
-agentic-ni --prompt-set ospf_l3vpn -i "R1とR2をOSPFエリア0で接続する"
+agentic-ni --prompt-set ospf_l3vpn -i
 
 # RAGを有効にして実行（成功時にエラー→成功設計の対応を自動保存）
-agentic-ni --use-rag "R1とR2をOSPFで接続する"
+agentic-ni --use-rag
 
 # RAGストアの統計確認
 agentic-ni --rag-stats
@@ -740,21 +752,31 @@ agentic-ni --rag-stats
 ネットワーク要件の種類に合わせてプロンプトセットを追加できます。
 
 1. `src/agentic_ni/prompts/<セット名>/` ディレクトリを作成する。
-2. `architect_system.md`（設計エージェント用）を作成する。
-3. `validator_system.md`（検証エージェント用）を作成する。
+2. `requirement.md`（実行する要件テキスト）を作成する。これのみ必須。
+3. 必要な場合は `architect_system.md` / `validator_system.md` を作成する。
+   省略した場合は `prompts/architect_system.md` と `prompts/validator_system.md`（ルート直下）が使われます。
+
+**プロンプトの読み込み優先順位**:
+```
+1. prompts/<セット名>/architect_system.md  ← セット内にあればこちらを優先
+2. prompts/architect_system.md              ← なければルートの共通プロンプトがフォールバック
+```
+検証エージェント用の `validator_system.md` も同様。
 
 ```bash
 # 例: BGP 設計用セットを追加
 mkdir -p src/agentic_ni/prompts/bgp_design
-cp src/agentic_ni/prompts/default/architect_system.md src/agentic_ni/prompts/bgp_design/
-cp src/agentic_ni/prompts/default/validator_system.md src/agentic_ni/prompts/bgp_design/
-# 各ファイルを要件に合わせて編集する
+
+# requirement.md は必須
+# architect_system.md / validator_system.md は任意（省略時は共通プロンプトが使われる）
+cp src/agentic_ni/prompts/demo/requirement.md src/agentic_ni/prompts/bgp_design/
+# requirement.md を編集してBGP要件を記載する
 
 # 追加後に確認
 agentic-ni --list-sets
 # 利用可能なプロンプトセット:
 #   - bgp_design
-#   - default
+#   - demo
 ```
 
 ### Python コードから実行する場合
@@ -765,7 +787,7 @@ from agentic_ni.graph import compile_graph, initial_state
 app = compile_graph()
 result = app.invoke(initial_state(
     requirement="R1とR2をOSPFエリア0で接続する",
-    prompt_set="default",   # 省略可（デフォルト: 'default'）
+    prompt_set="demo",     # 省略可（デフォルト: 'demo'）
     use_rag=True,           # 省略可（デフォルト: False）
 ))
 print(result["final_report"])
@@ -863,37 +885,4 @@ grep -A5 "show ip ospf neighbor" logs/agentic-ni-*.log
 ```dotenv
 # 最大リトライ回数（デフォルト: 5）
 MAX_RETRIES=3
-```
-
-
-失敗牽引をAIが分析中、分析完了、のあとに分析結果のサマリを表示して欲しい。
-
-```
-============================================================
-[第1回 / 上限5回]  設計エージェント  (初回設計)
-============================================================
-  >>> LLM にトポロジーとコンフィグを生成させています...
-  <<< 設計完了
-
-[第1回 / 上限5回]  検証エージェント  開始
-  [1/4] CML にデプロイ中...
-    ラボをインポート中...
-    コンフィグを投入中 (2 ノード)...
-    ラボを起動中...
-    ノードの起動を待機中...
-    起動完了 (lab_id=5a6a5c80-dda6-457d-8cb5-767a9b082977)
-  [1/4] デプロイ完了 (lab_id=5a6a5c80-dda6-457d-8cb5-767a9b082977)
-  [2/4] テスト計画を立案中...
-  [2/4] テスト計画完了 (4 件)
-  [3/4] テストを実行中...
-        (1/4) Verify OSPF neighbor relationship on R1.
-               → ✅ PASS  1 neighbor(s) FULL
-        (2/4) Verify OSPF neighbor relationship on R2.
-               → ✅ PASS  1 neighbor(s) FULL
-        (3/4) Check connectivity from R1 to R2 via OSPF-established route.
-               → ❌ FAIL  ping 10.0.0.2 FAILED
-        (4/4) Check connectivity from R2 to R1 via OSPF-established route.
-               → ❌ FAIL  ping 10.0.0.1 FAILED
-  [4/4] 失敗原因を AI が分析中... (2 件失敗)
-  [4/4] 分析完了
 ```

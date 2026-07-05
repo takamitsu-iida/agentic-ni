@@ -275,7 +275,7 @@ def compile_graph_interactive():
     return build_graph(human_in_the_loop=True).compile(checkpointer=MemorySaver())
 
 
-def initial_state(requirement: str, prompt_set: str = "default", use_rag: bool = False) -> AgentState:
+def initial_state(requirement: str, prompt_set: str = "demo", use_rag: bool = False) -> AgentState:
     """初期ステートを生成するファクトリー関数。
 
     Args:
@@ -298,11 +298,49 @@ def initial_state(requirement: str, prompt_set: str = "default", use_rag: bool =
     )
 
 
+def load_requirement(prompt_set: str) -> str:
+    """prompt_set ディレクトリの requirement.md を読み込んで返す。"""
+    from pathlib import Path
+    prompts_dir = Path(__file__).parent / "prompts"
+    path = prompts_dir / prompt_set / "requirement.md"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"プロンプトセット '{prompt_set}' に requirement.md が見つかりません: {path}\n"
+            f"ファイルを作成して要件テキストを記載してください。"
+        )
+    return path.read_text(encoding="utf-8").strip()
+
+
 def main() -> None:
     """CLI エントリポイント。"""
     import sys
 
     args = sys.argv[1:]
+
+    # 引数なし or --help / -h: ヘルプを表示して終了
+    if not args or "--help" in args or "-h" in args:
+        print(
+            "使い方: agentic-ni [オプション]\n"
+            "\n"
+            "要件はプロンプトセット内の requirement.md に記載してください。\n"
+            "\n"
+            "オプション:\n"
+            "  --prompt-set <名前>  使用するプロンプトセットを指定する（デフォルト: demo）\n"
+            "  --list-sets          利用可能なプロンプトセット一覧を表示して終了する\n"
+            "  --use-rag            修正設計時に過去の成功事例をプロンプトに追加する（要 chromadb）\n"
+            "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
+            "  -i / --interactive   Human-in-the-Loop モードで実行する\n"
+            "  -h / --help          このヘルプを表示して終了する\n"
+            "\n"
+            "例:\n"
+            "  agentic-ni                              # demo セットの要件で実行\n"
+            "  agentic-ni --prompt-set ospf_l3vpn      # ospf_l3vpn セットの要件で実行\n"
+            "  agentic-ni --use-rag                    # RAGを有効にして実行\n"
+            "  agentic-ni -i                           # Human-in-the-Loop モードで実行\n"
+            "  agentic-ni --list-sets\n"
+            "  agentic-ni --rag-stats"
+        )
+        return
 
     # --list-sets: 利用可能なプロンプトセット一覧を表示して終了
     if "--list-sets" in args:
@@ -326,7 +364,7 @@ def main() -> None:
     use_rag = "--use-rag" in args
 
     # --prompt-set <name> の解析
-    prompt_set = "default"
+    prompt_set = "demo"
     if "--prompt-set" in args:
         idx = args.index("--prompt-set")
         if idx + 1 < len(args):
@@ -336,9 +374,12 @@ def main() -> None:
             print("エラー: --prompt-set の後にセット名を指定してください。", file=sys.stderr)
             sys.exit(1)
 
-    # 残りの引数をスペース結合して要件とする
-    filtered = [a for a in args if a not in ("--interactive", "-i", "--use-rag")]
-    requirement = " ".join(filtered) or "R1とR2をOSPFで接続する"
+    # 要件はプロンプトセットの requirement.md から読み込む
+    try:
+        requirement = load_requirement(prompt_set)
+    except FileNotFoundError as exc:
+        print(f"エラー: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     if interactive:
         import uuid
