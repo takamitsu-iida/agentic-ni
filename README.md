@@ -70,8 +70,12 @@ agentic-ni/
 │       │   └── pyats_tools.py   # pyATS/Genie ラッパー
 │       │
 │       └── prompts/
-│           ├── architect_system.md
-│           └── validator_system.md
+│          ├── default/                 # デフォルトプロンプトセット
+│          │   ├── architect_system.md
+│          │   └── validator_system.md
+│          └── <セット名>/              # 任意で追加可能（例: ospf_l3vpn/）
+│              ├── architect_system.md
+│              └── validator_system.md
 │
 └── tests/
     ├── __init__.py
@@ -683,6 +687,80 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
 ---
 
+## コマンドラインの使い方
+
+### 基本構文
+
+```bash
+agentic-ni [オプション] [要件テキスト]
+```
+
+要件テキストを省略した場合は `"R1とR2をOSPFで接続する"` がデフォルト値として使用されます。
+
+### オプション一覧
+
+| オプション | 説明 |
+|---|---|
+| `--prompt-set <名前>` | 使用するプロンプトセットを指定する（デフォルト: `default`） |
+| `--list-sets` | 利用可能なプロンプトセット一覧を表示して終了する |
+| `-i` / `--interactive` | Human-in-the-Loop モードで実行する（最終レポートを人間が承認/却下） |
+
+### 使用例
+
+```bash
+# デフォルトプロンプトセットで実行
+agentic-ni "R1とR2をOSPFで接続する"
+
+# 利用可能なプロンプトセット一覧を表示
+agentic-ni --list-sets
+
+# プロンプトセットを指定して実行
+agentic-ni --prompt-set ospf_l3vpn "R1とR2をOSPFエリア0で接続する"
+
+# Human-in-the-Loop モードで実行（最終レポートを承認/却下）
+agentic-ni -i "R1とR2をOSPFで接続する"
+
+# プロンプトセット指定 + インタラクティブモード
+agentic-ni --prompt-set ospf_l3vpn -i "R1とR2をOSPFエリア0で接続する"
+```
+
+### プロンプトセットの追加方法
+
+ネットワーク要件の種類に合わせてプロンプトセットを追加できます。
+
+1. `src/agentic_ni/prompts/<セット名>/` ディレクトリを作成する。
+2. `architect_system.md`（設計エージェント用）を作成する。
+3. `validator_system.md`（検証エージェント用）を作成する。
+
+```bash
+# 例: BGP 設計用セットを追加
+mkdir -p src/agentic_ni/prompts/bgp_design
+cp src/agentic_ni/prompts/default/architect_system.md src/agentic_ni/prompts/bgp_design/
+cp src/agentic_ni/prompts/default/validator_system.md src/agentic_ni/prompts/bgp_design/
+# 各ファイルを要件に合わせて編集する
+
+# 追加後に確認
+agentic-ni --list-sets
+# 利用可能なプロンプトセット:
+#   - bgp_design
+#   - default
+```
+
+### Python コードから実行する場合
+
+```python
+from agentic_ni.graph import compile_graph, initial_state
+
+app = compile_graph()
+result = app.invoke(initial_state(
+    requirement="R1とR2をOSPFエリア0で接続する",
+    prompt_set="default",   # 省略可（デフォルト: 'default'）
+))
+print(result["final_report"])
+```
+
+---
+
 ## デモンストレーション手順
 
 「設計 → デプロイ → 検証失敗 → 再設計 → 再検証 → 成功」というループを確実に再現するためのデモ用要件と手順を示します。
@@ -701,10 +779,8 @@ R1から 2.2.2.2 へpingが通り、R2から 1.1.1.1 へpingが通ること。
 ### デモの実行
 
 ```bash
-agentic-ni
+agentic-ni "R1とR2をOSPFエリア0で接続すること。それぞれにLoopbackインターフェースを設定し（R1: 1.1.1.1/32、R2: 2.2.2.2/32）、LoopbackアドレスをOSPFでアドバタイズすること。R1から 2.2.2.2 へpingが通り、R2から 1.1.1.1 へpingが通ること。"
 ```
-
-対話プロンプトで上記の要件を入力します。
 
 ### 期待される動作フロー
 
