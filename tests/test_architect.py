@@ -187,7 +187,10 @@ class TestArchitectRun:
         with patch("agentic_ni.agents.architect.get_llm", return_value=mock_llm):
             result = run(state)
 
-        assert result["topology_yaml"] == _SAMPLE_TOPOLOGY_YAML
+        # ラボ名が agentic-ni-<prompt_set> に上書きされていること
+        assert "agentic-ni-" in result["topology_yaml"]
+        # その他のYAML構造は保持されていること
+        assert "label: R1" in result["topology_yaml"] or "label: 'R1'" in result["topology_yaml"]
         assert result["device_configs"]["R1"] == _SAMPLE_CONFIGS["R1"]
         assert result["device_configs"]["R2"] == _SAMPLE_CONFIGS["R2"]
 

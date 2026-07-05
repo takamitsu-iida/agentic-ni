@@ -182,6 +182,23 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 
+def _set_lab_title(topology_yaml: str, title: str) -> str:
+    """topology_yaml の lab.title を指定値に上書きして返す。
+
+    フォーマットを保持するため正規表現で title 行のみ置換する。
+    title 行が存在しない場合は元の文字列をそのまま返す。
+    """
+    import re
+
+    return re.sub(
+        r'^(\s*title\s*:).*$',
+        lambda m: f"{m.group(1)} {title}",
+        topology_yaml,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+
 def run(state: AgentState) -> dict[str, Any]:
     """設計エージェントのLangGraphノード関数。
 
@@ -214,8 +231,13 @@ def run(state: AgentState) -> dict[str, Any]:
                 pass
         print(f"  【設計方針】 {result.design_rationale}", flush=True)
 
+    topology_yaml = _set_lab_title(
+        result.topology_yaml,
+        f"agentic-ni-{state.get('prompt_set', 'demo')}",
+    )
+
     return {
-        "topology_yaml": result.topology_yaml,
+        "topology_yaml": topology_yaml,
         "device_configs": {dc.device_name: dc.config_text for dc in result.device_configs},
         # 修正設計を出力したらエラーログをクリア（次の検証で上書きされる）
         "error_log": "",
