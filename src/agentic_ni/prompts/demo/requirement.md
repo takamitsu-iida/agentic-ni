@@ -13,8 +13,15 @@
 - 全インターフェース（Loopback含む）をOSPFに参加させる
 - Router-IDは各ルーターのLoopback0アドレスを使用する
 
+## iBGPの設定
+- AS番号: 65000
+- R1とR3の間でiBGPピアを設定する
+- BGPピアアドレス: R1のLoopback0 (1.1.1.1) ↔ R3のLoopback0 (3.3.3.3)
+- R1とR3の両方に `neighbor X.X.X.X update-source Loopback0` を必ず設定する
+- BGPセッションの確立にはOSPFで学習した 1.1.1.1/32 と 3.3.3.3/32 の経路が必要
+
 ## 必須検証項目
+- R1、R2、R3 全台でOSPFネイバーが確立していること
+- R1とR3の間のiBGPセッションが確立していること（R1とR3でbgp_summaryを確認）
 - R1から 3.3.3.3（R3のLoopback）へpingが通ること
 - R3から 1.1.1.1（R1のLoopback）へpingが通ること
-- R1から 2.2.2.2（R2のLoopback）へpingが通ること
-- R1、R2、R3全台でOSPFネイバーが確立していること
