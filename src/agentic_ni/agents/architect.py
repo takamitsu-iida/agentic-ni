@@ -54,22 +54,34 @@ class DesignOutput(BaseModel):
 
 
 def _load_system_prompt(prompt_set: str = "demo") -> str:
-    """architect_system.md を読み込んで返す。
+    """architect プロンプトを構築して返す。
 
-    優先順位:
-    1. prompts/<prompt_set>/architect_system.md
-    2. prompts/architect_system.md （フォールバック）
+    読み込み方針:
+    1. prompts/architect_system.md をベースとして読み込む
+    2. prompts/<set>/architect.md が存在すれば、セット固有ヒントとして末尾に結合する
+
+    後方互換:
+    - prompts/<set>/architect_system.md が存在する場合は単独使用（旧形式）
     """
-    set_path = _PROMPTS_DIR / prompt_set / "architect_system.md"
-    if set_path.exists():
-        return set_path.read_text(encoding="utf-8")
-    fallback = _PROMPTS_DIR / "architect_system.md"
-    if fallback.exists():
-        return fallback.read_text(encoding="utf-8")
-    raise FileNotFoundError(
-        f"architect_system.md が見つかりません。"
-        f"'{set_path}' または '{fallback}' を作成してください。"
-    )
+    base_path = _PROMPTS_DIR / "architect_system.md"
+    set_specific_path = _PROMPTS_DIR / prompt_set / "architect.md"
+    set_legacy_path = _PROMPTS_DIR / prompt_set / "architect_system.md"
+
+    # 後方互換: セット内に architect_system.md があれば単独使用
+    if set_legacy_path.exists():
+        return set_legacy_path.read_text(encoding="utf-8")
+
+    if not base_path.exists():
+        raise FileNotFoundError(
+            f"architect_system.md が見つかりません: {base_path}"
+        )
+    base = base_path.read_text(encoding="utf-8")
+
+    if set_specific_path.exists():
+        specific = set_specific_path.read_text(encoding="utf-8")
+        return f"{base}\n\n---\n\n{specific}"
+
+    return base
 
 
 def list_prompt_sets() -> list[str]:

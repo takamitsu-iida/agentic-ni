@@ -58,22 +58,34 @@ class FailureAnalysis(BaseModel):
 
 
 def _load_system_prompt(prompt_set: str = "demo") -> str:
-    """validator_system.md を読み込んで返す。
+    """validator プロンプトを構築して返す。
 
-    優先順位:
-    1. prompts/<prompt_set>/validator_system.md
-    2. prompts/validator_system.md （フォールバック）
+    読み込み方針:
+    1. prompts/validator_system.md をベースとして読み込む
+    2. prompts/<set>/validator.md が存在すれば、セット固有要件として末尾に結合する
+
+    後方互換:
+    - prompts/<set>/validator_system.md が存在する場合は単独使用（旧形式）
     """
-    set_path = _PROMPTS_DIR / prompt_set / "validator_system.md"
-    if set_path.exists():
-        return set_path.read_text(encoding="utf-8")
-    fallback = _PROMPTS_DIR / "validator_system.md"
-    if fallback.exists():
-        return fallback.read_text(encoding="utf-8")
-    raise FileNotFoundError(
-        f"validator_system.md が見つかりません。"
-        f"'{set_path}' または '{fallback}' を作成してください。"
-    )
+    base_path = _PROMPTS_DIR / "validator_system.md"
+    set_specific_path = _PROMPTS_DIR / prompt_set / "validator.md"
+    set_legacy_path = _PROMPTS_DIR / prompt_set / "validator_system.md"
+
+    # 後方互換: セット内に validator_system.md があれば単独使用
+    if set_legacy_path.exists():
+        return set_legacy_path.read_text(encoding="utf-8")
+
+    if not base_path.exists():
+        raise FileNotFoundError(
+            f"validator_system.md が見つかりません: {base_path}"
+        )
+    base = base_path.read_text(encoding="utf-8")
+
+    if set_specific_path.exists():
+        specific = set_specific_path.read_text(encoding="utf-8")
+        return f"{base}\n\n---\n\n{specific}"
+
+    return base
 
 
 def list_prompt_sets() -> list[str]:

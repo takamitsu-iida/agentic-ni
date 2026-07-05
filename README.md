@@ -71,14 +71,16 @@ agentic-ni/
        │   └── rag_tools.py     # ベクトルRAG（ChromaDB）ラッパー
 │       │
 │       └── prompts/
-          ├── architect_system.md      # 設計エージェント共通プロンプト（フォールバック）
-          ├── validator_system.md      # 検証エージェント共通プロンプト（フォールバック）
+          ├── architect_system.md      # 設計エージェント 共通プロンプト（常に読み込む）
+          ├── validator_system.md      # 検証エージェント 共通プロンプト（常に読み込む）
           ├── demo/                     # デフォルトプロンプトセット（デモ用）
-          │   └── requirement.md        # 実行する要件テキスト
+          │   ├── requirement.md        # 必須: 実行する要件テキスト
+          │   ├── architect.md          # セット固有の設計ヒント・IPアドレス仕様
+          │   └── validator.md          # 必須テスト一覧と固有の失敗パターン
           └── <セット名>/              # 任意で追加可能（例: ospf_l3vpn/）
               ├── requirement.md        # 必須: 実行する要件テキスト
-              ├── architect_system.md  # 任意: なければ共通プロンプトを使用
-              └── validator_system.md  # 任意: なければ共通プロンプトを使用
+              ├── architect.md          # 任意: 設計エージェントへのセット固有ヒント
+              └── validator.md          # 任意: 必須テスト一覧と固有失敗パターン
 │
 └── tests/
     ├── __init__.py
@@ -745,15 +747,21 @@ agentic-ni --rag-stats
 
 1. `src/agentic_ni/prompts/<セット名>/` ディレクトリを作成する。
 2. `requirement.md`（実行する要件テキスト）を作成する。これのみ必須。
-3. 必要な場合は `architect_system.md` / `validator_system.md` を作成する。
-   省略した場合は `prompts/architect_system.md` と `prompts/validator_system.md`（ルート直下）が使われます。
+3. `validator.md`（必須テスト一覧と固有の失敗パターン）を作成する。任意。
+4. `architect.md`（設計エージェントへのセット固有ヒント）を作成する。任意。
 
-**プロンプトの読み込み優先順位**:
+**プロンプトの構築方式**:
 ```
-1. prompts/<セット名>/architect_system.md  ← セット内にあればこちらを優先
-2. prompts/architect_system.md              ← なければルートの共通プロンプトがフォールバック
+【設計エージェント】
+prompts/architect_system.md   ← 常に読み込む（役割・YAML形式・出力ルール）
+  +
+prompts/<セット名>/architect.md  ← あれば末尾に追記（IPアドレス仕様・固有ヒント）
+
+【検証エージェント】
+prompts/validator_system.md   ← 常に読み込む（役割・テストタイプ・汎用ガイドライン）
+  +
+prompts/<セット名>/validator.md  ← あれば末尾に追記（必須テスト一覧・固有失敗パターン）
 ```
-検証エージェント用の `validator_system.md` も同様。
 
 ```bash
 # 例: BGP 設計用セットを追加
