@@ -57,6 +57,12 @@ links:
 - IOS-XEスイッチ: `iosvl2`
 - NX-OS: `nxosv`
 
+**インターフェースの注意事項**:
+- `interfaces` に記載するのは**物理インターフェースのみ**（GigabitEthernet等）
+- **LoopbackインターフェースはYAMLの `interfaces` に含めない**こと
+  Loopbackは `device_configs` の設定テキストにのみ記載する（例: `interface Loopback0`）
+- `type: loopback` や `slot: -1` はCML APIが受け付けないため使用禁止
+
 ## IOS-XEコンフィグのテンプレート
 
 ```

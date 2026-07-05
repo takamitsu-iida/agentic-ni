@@ -30,6 +30,8 @@ def _patch_topology_yaml(topology_yaml: str) -> str:
 
     * lab.version が存在しない → "0.1.0" を設定
     * links[].label が空文字 → link の id と同じ値を設定
+    * nodes[].interfaces に loopback 型または slot < 0 のものが含まれる
+      → CML はLoopbackをトポロジーで管理しないため除去する
     """
     data = yaml.safe_load(topology_yaml)
 
@@ -42,6 +44,17 @@ def _patch_topology_yaml(topology_yaml: str) -> str:
     for i, link in enumerate(data.get("links", [])):
         if not link.get("label"):
             link["label"] = link.get("id", f"l{i}")
+
+    # Loopbackインターフェース（type=loopback または slot<0）をノードから除去する
+    # LoopbackはCMLトポロジーに含める必要がなく、slot:-1等で含めるとAPIエラーになる
+    for node in data.get("nodes", []):
+        original = node.get("interfaces", [])
+        filtered = [
+            iface for iface in original
+            if iface.get("type") != "loopback" and iface.get("slot", 0) >= 0
+        ]
+        if len(filtered) != len(original):
+            node["interfaces"] = filtered
 
     return yaml.dump(data, default_flow_style=False, allow_unicode=True)
 
