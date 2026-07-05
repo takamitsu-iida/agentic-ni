@@ -265,6 +265,62 @@ def compile_graph():
     return build_graph(human_in_the_loop=False).compile()
 
 
+def dry_run_node(state: AgentState) -> dict:
+    """ドライランモードの出力ノード。設計結果を表示してファイルに保存する。"""
+    import os
+    from pathlib import Path
+
+    topology_yaml: str = state.get("topology_yaml", "")
+    device_configs: dict[str, str] = state.get("device_configs", {})
+    prompt_set: str = state.get("prompt_set", "demo")
+
+    # configs/<set_name>/ ディレクトリに保存
+    out_dir = Path("configs") / prompt_set
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # topology.yaml を保存
+    topo_path = out_dir / "topology.yaml"
+    topo_path.write_text(topology_yaml, encoding="utf-8")
+
+    # 機器ごとのコンフィグを <device>.cfg として保存
+    saved_files: list[str] = [str(topo_path)]
+    for device, config in device_configs.items():
+        cfg_path = out_dir / f"{device}.cfg"
+        cfg_path.write_text(config, encoding="utf-8")
+        saved_files.append(str(cfg_path))
+
+    # コンソール表示
+    sep = "=" * 60
+    device_section = "\n\n".join(
+        f"### {dev}\n```\n{cfg.strip()}\n```"
+        for dev, cfg in device_configs.items()
+    ) or "(コンフィグなし)"
+
+    report = (
+        f"# 設計レポート（ドライラン）\n\n"
+        f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"## 要件\n{state.get('requirement', '')}\n\n"
+        f"## トポロジー定義（CML YAML）\n\n"
+        f"```yaml\n{topology_yaml.strip()}\n```\n\n"
+        f"## 機器コンフィグ\n\n"
+        f"{device_section}\n\n"
+        f"## 保存先\n\n"
+        + "\n".join(f"- `{f}`" for f in saved_files)
+    )
+    return {"final_report": report}
+
+
+def compile_graph_dry_run():
+    """ドライランモード（設計のみ・CMLデプロイなし）のコンパイル済みグラフを返す。"""
+    graph = StateGraph(AgentState)
+    graph.add_node("architect", architect_node)
+    graph.add_node("dry_run", dry_run_node)
+    graph.set_entry_point("architect")
+    graph.add_edge("architect", "dry_run")
+    graph.add_edge("dry_run", END)
+    return graph.compile()
+
+
 def compile_graph_interactive():
     """Human-in-the-Loop ありのコンパイル済みグラフを返す。
 
@@ -326,6 +382,7 @@ def main() -> None:
             "\n"
             "オプション:\n"
             "  --list               利用可能なプロンプトセット一覧を表示して終了する\n"
+            "  --dry-run            CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
             "  --use-rag            修正設計時に過去の成功事例をプロンプトに追加する（要 chromadb）\n"
             "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
             "  -h / --help          このヘルプを表示して終了する\n"
@@ -333,6 +390,7 @@ def main() -> None:
             "例:\n"
             "  agentic-ni demo                  # demo セットの要件で実行\n"
             "  agentic-ni ospf_l3vpn            # ospf_l3vpn セットの要件で実行\n"
+            "  agentic-ni demo --dry-run          # CMLなしでコンフィグ生成のみ\n"
             "  agentic-ni demo --use-rag        # RAGを有効にして実行\n"
             "  agentic-ni --list\n"
             "  agentic-ni --rag-stats"
@@ -358,6 +416,7 @@ def main() -> None:
         return
 
     use_rag = "--use-rag" in args
+    dry_run = "--dry-run" in args
 
     # 位置引数（フラグ以外）= プロンプトセット名
     positional = [a for a in args if not a.startswith("-")]
@@ -378,6 +437,8 @@ def main() -> None:
         sys.exit(1)
 
     print(f"プロンプトセット: {prompt_set}")
+    if dry_run:
+        print("モード: ドライラン（CMLデプロイなし）")
     if use_rag:
         print(f"RAG: 有効")
     print()
@@ -387,7 +448,7 @@ def main() -> None:
     print()
     print("処理を開始します...\n")
 
-    app = compile_graph()
+    app = compile_graph_dry_run() if dry_run else compile_graph()
     result = app.invoke(initial_state(requirement, prompt_set, use_rag))
     print(result.get("final_report", "(レポートなし)"))
 

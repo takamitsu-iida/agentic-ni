@@ -396,3 +396,210 @@ class TestCheckVlanInterfaces:
 
         assert result["vlans"] == {}
         assert result["interfaces_up"] == 0
+
+
+# ---------------------------------------------------------------------------
+# check_route_table のテスト
+# ---------------------------------------------------------------------------
+
+class TestCheckRouteTable:
+    def test_prefix_found(self):
+        genie_output = {
+            "entry": {
+                "1.1.1.1/32": {
+                    "source_protocol": "ospf",
+                    "next_hop": {
+                        "next_hop_list": {
+                            1: {"next_hop": "10.0.12.2"}
+                        }
+                    }
+                }
+            }
+        }
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value=genie_output):
+            from agentic_ni.tools.pyats_tools import check_route_table
+            result = check_route_table(SAMPLE_TESTBED_YAML, "R1", "1.1.1.1/32")
+
+        assert result["found"] is True
+        assert result["protocol"] == "ospf"
+        assert result["next_hop"] == "10.0.12.2"
+
+    def test_prefix_not_found(self):
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value={}):
+            from agentic_ni.tools.pyats_tools import check_route_table
+            result = check_route_table(SAMPLE_TESTBED_YAML, "R1", "9.9.9.9/32")
+
+        assert result["found"] is False
+
+
+# ---------------------------------------------------------------------------
+# check_interface_status のテスト
+# ---------------------------------------------------------------------------
+
+class TestCheckInterfaceStatus:
+    def test_interface_up(self):
+        genie_output = {
+            "GigabitEthernet0/0": {
+                "oper_status": "up",
+                "line_protocol": "up",
+            }
+        }
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value=genie_output):
+            from agentic_ni.tools.pyats_tools import check_interface_status
+            result = check_interface_status(SAMPLE_TESTBED_YAML, "R1", "GigabitEthernet0/0")
+
+        assert result["both_up"] is True
+
+    def test_interface_down(self):
+        genie_output = {
+            "GigabitEthernet0/0": {
+                "oper_status": "down",
+                "line_protocol": "down",
+            }
+        }
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value=genie_output):
+            from agentic_ni.tools.pyats_tools import check_interface_status
+            result = check_interface_status(SAMPLE_TESTBED_YAML, "R1", "GigabitEthernet0/0")
+
+        assert result["both_up"] is False
+        assert result["line_up"] is False
+
+
+# ---------------------------------------------------------------------------
+# check_traceroute のテスト
+# ---------------------------------------------------------------------------
+
+class TestCheckTraceroute:
+    def _mock_device(self, output: str):
+        mock_dev = MagicMock()
+        mock_dev.execute.return_value = output
+        return mock_dev
+
+    def test_reached_target(self):
+        trace_output = """\
+  1  10.0.12.2  4 msec  4 msec  4 msec
+  2  2.2.2.2  8 msec  8 msec  8 msec"""
+        with patch("agentic_ni.tools.pyats_tools._load_testbed"), \
+             patch("agentic_ni.tools.pyats_tools._connect_device",
+                   return_value=self._mock_device(trace_output)):
+            from agentic_ni.tools.pyats_tools import check_traceroute
+            result = check_traceroute(SAMPLE_TESTBED_YAML, "R1", "2.2.2.2")
+
+        assert result["reached"] is True
+        assert "10.0.12.2" in result["hops"]
+        assert "2.2.2.2" in result["hops"]
+        assert result["hop_count"] == 2
+
+    def test_not_reached(self):
+        trace_output = """\
+  1  10.0.12.2  4 msec  4 msec  4 msec
+  2  * * *
+  3  * * *"""
+        with patch("agentic_ni.tools.pyats_tools._load_testbed"), \
+             patch("agentic_ni.tools.pyats_tools._connect_device",
+                   return_value=self._mock_device(trace_output)):
+            from agentic_ni.tools.pyats_tools import check_traceroute
+            result = check_traceroute(SAMPLE_TESTBED_YAML, "R1", "9.9.9.9")
+
+        assert result["reached"] is False
+
+
+# ---------------------------------------------------------------------------
+# check_bgp_path のテスト
+# ---------------------------------------------------------------------------
+
+class TestCheckBgpPath:
+    def test_prefix_found_with_best_path(self):
+        genie_output = {
+            "vrf": {
+                "default": {
+                    "address_family": {
+                        "ipv4 unicast": {
+                            "prefixes": {
+                                "2.2.2.2/32": {
+                                    "paths": {
+                                        1: {
+                                            "best_path": True,
+                                            "next_hop": "2.2.2.2",
+                                            "origin_codes": "i",
+                                            "localpref": 100,
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value=genie_output):
+            from agentic_ni.tools.pyats_tools import check_bgp_path
+            result = check_bgp_path(SAMPLE_TESTBED_YAML, "R1", "2.2.2.2/32")
+
+        assert result["found"] is True
+        assert result["best_next_hop"] == "2.2.2.2"
+        assert result["origin"] == "i"
+        assert result["local_pref"] == 100
+
+    def test_prefix_not_found(self):
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value={}):
+            from agentic_ni.tools.pyats_tools import check_bgp_path
+            result = check_bgp_path(SAMPLE_TESTBED_YAML, "R1", "9.9.9.9/32")
+
+        assert result["found"] is False
+
+
+# ---------------------------------------------------------------------------
+# validator._execute_test の新テストタイプテスト
+# ---------------------------------------------------------------------------
+
+class TestExecuteTestNewTypes:
+    def _make_item(self, test_type, device="R1", target=None, description="test"):
+        from agentic_ni.agents.validator import TestItem
+        return TestItem(test_type=test_type, device=device, target=target, description=description)
+
+    def test_route_table_pass(self):
+        from agentic_ni.agents.validator import _execute_test
+        with patch("agentic_ni.tools.pyats_tools.check_route_table",
+                   return_value={"found": True, "protocol": "ospf", "next_hop": "10.0.0.2"}):
+            result = _execute_test(self._make_item("route_table", target="1.1.1.1/32"), "tb")
+        assert result["result"] == "PASS"
+        assert "ospf" in result["detail"]
+
+    def test_route_table_fail(self):
+        from agentic_ni.agents.validator import _execute_test
+        with patch("agentic_ni.tools.pyats_tools.check_route_table",
+                   return_value={"found": False, "protocol": "", "next_hop": ""}):
+            result = _execute_test(self._make_item("route_table", target="9.9.9.9/32"), "tb")
+        assert result["result"] == "FAIL"
+
+    def test_interface_status_pass(self):
+        from agentic_ni.agents.validator import _execute_test
+        with patch("agentic_ni.tools.pyats_tools.check_interface_status",
+                   return_value={"both_up": True, "line_up": True, "protocol_up": True}):
+            result = _execute_test(
+                self._make_item("interface_status", target="GigabitEthernet0/0"), "tb"
+            )
+        assert result["result"] == "PASS"
+
+    def test_traceroute_pass(self):
+        from agentic_ni.agents.validator import _execute_test
+        with patch("agentic_ni.tools.pyats_tools.check_traceroute",
+                   return_value={"reached": True, "hops": ["10.0.0.1", "2.2.2.2"], "hop_count": 2}):
+            result = _execute_test(self._make_item("traceroute", target="2.2.2.2"), "tb")
+        assert result["result"] == "PASS"
+        assert "2 hop" in result["detail"]
+
+    def test_bgp_path_pass(self):
+        from agentic_ni.agents.validator import _execute_test
+        with patch("agentic_ni.tools.pyats_tools.check_bgp_path",
+                   return_value={"found": True, "best_next_hop": "2.2.2.2", "origin": "i", "local_pref": 100}):
+            result = _execute_test(self._make_item("bgp_path", target="2.2.2.2/32"), "tb")
+        assert result["result"] == "PASS"
+
+    def test_missing_target_returns_fail(self):
+        from agentic_ni.agents.validator import _execute_test
+        for test_type in ("route_table", "interface_status", "traceroute", "bgp_path"):
+            result = _execute_test(self._make_item(test_type, target=None), "tb")
+            assert result["result"] == "FAIL"
+            assert "未指定" in result["detail"]

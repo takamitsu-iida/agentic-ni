@@ -23,12 +23,28 @@ _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 class TestItem(BaseModel):
     """テスト計画の1項目。"""
 
-    test_type: Literal["ospf_neighbors", "bgp_summary", "ping", "vlan_interfaces"] = Field(
+    test_type: Literal[
+        "ospf_neighbors",
+        "bgp_summary",
+        "ping",
+        "vlan_interfaces",
+        "route_table",
+        "interface_status",
+        "traceroute",
+        "bgp_path",
+    ] = Field(
         description="実行するテストの種別。"
     )
     device: str = Field(description="テストを実行するデバイス名（ノードlabelと一致させること）。")
     target: str | None = Field(
-        default=None, description="ping テスト時の宛先IPアドレス。他のテストでは null。"
+        default=None,
+        description=(
+            "テスト対象の値。"
+            "ping/traceroute: 宛先IPアドレス。"
+            "route_table/bgp_path: 確認するプレフィックス（例: '1.1.1.1/32'）。"
+            "interface_status: インターフェース名（例: 'GigabitEthernet0/0'）。"
+            "その他のテストでは null。"
+        ),
     )
     description: str = Field(description="このテスト項目の目的説明（ログ用）。")
 
@@ -203,6 +219,48 @@ def _execute_test(item: TestItem, testbed_yaml: str) -> TestResult:
             ok = len(data["vlans"]) > 0 or data["interfaces_up"] > 0
             detail = (
                 f"vlans={list(data['vlans'].keys())}, interfaces_up={data['interfaces_up']}"
+            )
+
+        elif item.test_type == "route_table":
+            if not item.target:
+                return TestResult(test=item.description, result="FAIL", detail="target（プレフィックス）が未指定")
+            data = pyats_tools.check_route_table(testbed_yaml, item.device, item.target)
+            ok = data["found"]
+            detail = (
+                f"prefix={item.target} found via {data['protocol']}, next_hop={data['next_hop']}"
+                if ok
+                else f"prefix={item.target} not found in routing table"
+            )
+
+        elif item.test_type == "interface_status":
+            if not item.target:
+                return TestResult(test=item.description, result="FAIL", detail="target（インターフェース名）が未指定")
+            data = pyats_tools.check_interface_status(testbed_yaml, item.device, item.target)
+            ok = data["both_up"]
+            line = "up" if data["line_up"] else "down"
+            proto = "up" if data["protocol_up"] else "down"
+            detail = f"{item.target}: line={line}, protocol={proto}"
+
+        elif item.test_type == "traceroute":
+            if not item.target:
+                return TestResult(test=item.description, result="FAIL", detail="target（宛先IP）が未指定")
+            data = pyats_tools.check_traceroute(testbed_yaml, item.device, item.target)
+            ok = data["reached"]
+            detail = (
+                f"reached {item.target} in {data['hop_count']} hop(s): {' -> '.join(data['hops'])}"
+                if ok
+                else f"could not reach {item.target}, hops={data['hops']}"
+            )
+
+        elif item.test_type == "bgp_path":
+            if not item.target:
+                return TestResult(test=item.description, result="FAIL", detail="target（プレフィックス）が未指定")
+            data = pyats_tools.check_bgp_path(testbed_yaml, item.device, item.target)
+            ok = data["found"]
+            detail = (
+                f"prefix={item.target} best_next_hop={data['best_next_hop']}, origin={data['origin']}"
+                if ok
+                else f"prefix={item.target} not found in BGP table"
             )
 
         else:

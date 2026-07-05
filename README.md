@@ -718,6 +718,7 @@ CLI引数として要件テキストを渡すことはできません。
 | オプション | 説明 |
 |---|---|
 | `--list` | 利用可能なプロンプトセット一覧を表示して終了する |
+| `--dry-run` | CMLデプロイをスキップして設計・コンフィグ生成のみ行う（CML不要） |
 | `--use-rag` | 修正設計時に過去の成功事例をプロンプトに追加する（要 `chromadb`） |
 | `--rag-stats` | RAGストアの保存件数と保存場所を表示して終了する |
 | `-h` / `--help` | ヘルプを表示して終了する |
@@ -734,12 +735,31 @@ agentic-ni --list
 # プロンプトセットを指定して実行（そのセットの requirement.md が使われる）
 agentic-ni static
 
+# CML不要モード（デプロイなしでコンフィグ生成のみ）
+agentic-ni demo --dry-run
+# → configs/demo/topology.yaml, R1.cfg, R2.cfg が生成される
+
 # RAGを有効にして実行（成功時にエラー→成功設計の対応を自動保存）
 agentic-ni demo --use-rag
 
 # RAGストアの統計確認
 agentic-ni --rag-stats
 ```
+
+### --dry-run モード
+
+CML環境がなくても、要件からコンフィグを生成するだけ利用できます。
+生成されたファイルは `configs/<セット名>/` に保存されます。
+
+```
+configs/
+  demo/
+    topology.yaml   ← CMLへのインポート用YAML
+    R1.cfg          ← 実機かラボR1へ適用できるIOSコンフィグ
+    R2.cfg          ← 実機かラボR2へ適用できるIOSコンフィグ
+```
+
+設計エージェントのループ1回のみ実行し、検証（テスト）はスキップされます。
 
 ### プロンプトセットの追加方法
 
@@ -886,3 +906,163 @@ grep -A5 "show ip ospf neighbor" logs/agentic-ni-*.log
 # 最大リトライ回数（デフォルト: 5）
 MAX_RETRIES=3
 ```
+
+---
+
+## 今後の実装計画
+
+現在の基盤（要件入力 → 設計 → CMLデプロイ → 検証 → 修正ループ）を活かして、
+実際のネットワークエンジニアにとって役立つ機能を順次拡充する。
+
+### Phase A — テスト・検証の拡充 ✅ 完了
+
+**目標**: より現実的なネットワーク検証ができるようにする。
+
+| 追加テストタイプ | 説明 |
+|---|---|
+| `route_table` | `show ip route` でルーティングテーブルを確認。特定プレフィックスの有無を検証する |
+| `interface_status` | `show interface` でインターフェースの up/up 状態を確認 |
+| `traceroute` | 経路が期待通りのホップを通過しているかを確認 |
+| `bgp_path` | BGP best path が期待通りのピアから学習されているかを確認 |
+
+**実装方針**:
+- `pyats_tools.py` に新関数を追加
+- `TestItem.test_type` の `Literal` を拡張
+- `validator_system.md` のテストタイプ表を更新
+
+---
+
+### Phase B — 障害シミュレーション（工数小〜中）
+
+**目標**: リンクダウン・ノード障害後の収束確認を自動化する。
+
+`set_link_state()` は `cml_tools.py` に実装済みのため、検証エージェントのテスト計画に組み込むだけでよい。
+
+**想定シナリオ**:
+```
+要件: "プライマリリンクがダウンしても、バックアップ経由で通信が継続すること"
+
+検証フロー:
+  1. 通常時の疎通確認 (ping PASS)
+  2. プライマリリンクをダウン (set_link_state → down)
+  3. フェイルオーバー後の疎通確認 (ping PASS)
+  4. リンクを復旧 (set_link_state → up)
+  5. 元の経路に戻ることを確認
+```
+
+**実装方針**:
+- `TestItem.test_type` に `link_failover` を追加
+- `validator.py` の `_execute_test` にフェイルオーバーシーケンスを実装
+
+---
+
+### Phase C — コンフィグ生成のみモード ✅ 完了
+
+**目標**: CML環境がなくても設計・コンフィグ生成だけ使えるようにする。
+
+```bash
+# CMLデプロイをスキップしてコンフィグを出力するだけ
+agentic-ni demo --dry-run
+```
+
+**出力**: `configs/<セット名>/` ディレクトリに以下のファイルを保存する。
+- `topology.yaml` — CML向けトポロジー定義
+- `R1.cfg`, `R2.cfg` ... — 機器ごとのコンフィグファイル
+
+---
+
+### Phase D — 設計ドキュメント自動生成（工数中）
+
+**目標**: 最終レポートに加えて、実務で使えるドキュメントを生成する。
+
+生成するドキュメント:
+
+| ドキュメント | 内容 |
+|---|---|
+| IPアドレス台帳 | ノード・インターフェース・IPアドレスの一覧表（Markdown/CSV） |
+| ルーティング設計書 | OSPFエリア構成、BGP AS番号・ピア構成の概要 |
+| コンフィグファイル群 | 機器ごとに `configs/R1.cfg`、`configs/R2.cfg` として保存 |
+
+**実装方針**:
+- `report_node()` にドキュメント生成処理を追加
+- `logs/` または `configs/` ディレクトリに自動保存
+- トポロジーYAMLをパースしてIPアドレス台帳を構築
+
+---
+
+### Phase E — 既存CMLラボの取り込みと分析（工数中）
+
+**目標**: 既存のCMLラボを読み込み、AIが問題点・改善点を分析する。
+
+```bash
+# 既存ラボを分析
+agentic-ni --analyze <lab_id>
+
+# 既存ラボをベースに改善提案
+agentic-ni --improve <lab_id> "OSPFにBFDを追加したい"
+```
+
+**実装方針**:
+- `cml_tools.py` に `export_lab_configs(lab_id)` を追加
+- 既存コンフィグを取得して `AgentState` に注入
+- 設計エージェントに「既存設計の改善モード」を追加
+
+---
+
+### Phase F — プロンプトセットの拡充（工数中〜大）
+
+**目標**: 実務でよく使われるネットワーク構成のプロンプトセットを追加する。
+
+| プロンプトセット名 | 概要 |
+|---|---|
+| `mpls_l3vpn` | MPLS L3VPN（PE-CE BGP、VRF設定） |
+| `datacenter_leaf_spine` | Data Center Leaf-Spine（BGP EVPN/VXLAN） |
+| `wan_dual_isp` | デュアルISP冗長（BGP、フェイルオーバー） |
+| `security_zone` | ゾーンベースファイアウォール（IOS ZBF） |
+| `qos_dscp` | QoS設計（DSCP分類・マーキング・キューイング） |
+
+各セットは `prompts/<set>/` に以下を用意する:
+- `requirement.md` — 標準的な要件テンプレート（カスタマイズして使う）
+- `architect.md` — そのプロトコルスタック特有の設計ヒント
+- `validator.md` — 必須テスト一覧と固有失敗パターン
+
+---
+
+### Phase G — マルチベンダー対応（工数大）
+
+**目標**: Cisco以外のベンダーにも対応する。
+
+| ベンダー | node_definition | 設定言語 |
+|---|---|---|
+| Cisco Nexus (NX-OS) | `nxosv` | NX-OS CLI |
+| Arista EOS | `eos` | EOS CLI |
+| Juniper vMX | `vmx` | Junos CLI / set コマンド |
+
+**実装方針**:
+- `architect_system.md` にベンダーごとのコンフィグテンプレートを追加
+- pyATSの `os` 設定をノードごとに自動設定
+- ベンダー固有のShowコマンド対応（Genie parsers）
+
+---
+
+### Phase H — トラブルシューティングモード（工数大）
+
+**目標**: 「動かない既存構成の原因診断」に特化したモードを追加する。
+
+```bash
+# 既存ラボの問題を診断
+agentic-ni --troubleshoot <lab_id>
+```
+
+**実行フロー**:
+```
+1. 既存ラボのコンフィグとShow結果を取得
+2. 設計エージェント（診断モード）が問題を推論
+3. 検証エージェントが問題箇所を特定するテストを実行
+4. 根本原因と修正手順をレポート出力
+```
+
+**実装方針**:
+- `graph.py` に `compile_graph_troubleshoot()` を追加
+- 診断モード専用のプロンプトセット（`troubleshoot/architect.md`）を作成
+- 修正提案にとどまり自動変更はしない（安全のため）

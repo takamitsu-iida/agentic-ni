@@ -344,3 +344,196 @@ def check_vlan_interfaces(testbed_yaml: str, device_name: str) -> dict:
         "vlan_raw": vlan_raw,
         "intf_raw": intf_raw,
     }
+
+
+def check_route_table(testbed_yaml: str, device_name: str, prefix: str) -> dict:
+    """ルーティングテーブルに指定プレフィックスが存在するかを確認する。
+
+    Args:
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+        device_name: 確認するデバイス名。
+        prefix: 確認するプレフィックス（例: "1.1.1.1/32", "10.0.0.0/8"）。
+
+    Returns:
+        dict:
+            "found": bool — プレフィックスが存在するか
+            "protocol": str — 学習プロトコル（"ospf", "bgp", "static", "connected" 等）
+            "next_hop": str — ネクストホップアドレス（存在する場合）
+            "raw": dict — Genie パース結果
+    """
+    raw = run_show_command(testbed_yaml, device_name, f"show ip route {prefix}")
+
+    found = False
+    protocol = ""
+    next_hop = ""
+
+    # Genie パース結果構造:
+    # { "entry": { <prefix>: { "ip": "...", "mask": "...",
+    #   "next_hop": { "next_hop_list": { 1: { "next_hop": "...", ... } } },
+    #   "source_protocol": "ospf", ... } } }
+    try:
+        for entry_prefix, entry_data in raw.get("entry", {}).items():
+            if prefix.split("/")[0] in entry_prefix or entry_prefix in prefix:
+                found = True
+                protocol = entry_data.get("source_protocol", "")
+                nh_list = entry_data.get("next_hop", {}).get("next_hop_list", {})
+                if nh_list:
+                    first = next(iter(nh_list.values()), {})
+                    next_hop = first.get("next_hop", "")
+                break
+    except (AttributeError, TypeError):
+        pass
+
+    # パース失敗時はraw出力のテキストから判定
+    if not found and isinstance(raw, str):
+        found = prefix.split("/")[0] in raw and "%" not in raw
+
+    return {
+        "found": found,
+        "protocol": protocol,
+        "next_hop": next_hop,
+        "raw": raw,
+    }
+
+
+def check_interface_status(testbed_yaml: str, device_name: str, interface: str) -> dict:
+    """指定インターフェースの up/down 状態を確認する。
+
+    Args:
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+        device_name: 確認するデバイス名。
+        interface: インターフェース名（例: "GigabitEthernet0/0", "Loopback0"）。
+
+    Returns:
+        dict:
+            "line_up": bool — ライン状態が up か
+            "protocol_up": bool — プロトコル状態が up か
+            "both_up": bool — 両方 up か
+            "raw": dict — Genie パース結果
+    """
+    raw = run_show_command(testbed_yaml, device_name, f"show interfaces {interface}")
+
+    line_up = False
+    protocol_up = False
+
+    # Genie パース結果構造:
+    # { "GigabitEthernet0/0": { "enabled": true, "line_protocol": "up",
+    #   "oper_status": "up", ... } }
+    try:
+        # Genie は { "GigabitEthernet0/0": { "oper_status": "up", ... } } を返す
+        intf_data = raw.get(interface)
+        if isinstance(intf_data, dict):
+            line_up = intf_data.get("oper_status", "").lower() == "up"
+            protocol_up = intf_data.get("line_protocol", "").lower() == "up"
+        else:
+            # インターフェース名が省略形の場合など、最初に見つかったエントリを使用
+            for val in raw.values():
+                if isinstance(val, dict):
+                    line_up = val.get("oper_status", "").lower() == "up"
+                    protocol_up = val.get("line_protocol", "").lower() == "up"
+                    break
+    except (AttributeError, TypeError):
+        pass
+
+    return {
+        "line_up": line_up,
+        "protocol_up": protocol_up,
+        "both_up": line_up and protocol_up,
+        "raw": raw,
+    }
+
+
+def check_traceroute(testbed_yaml: str, device_name: str, target: str) -> dict:
+    """traceroute を実行して到達可否と最終ホップを確認する。
+
+    Args:
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+        device_name: traceroute を実行するデバイス名。
+        target: 宛先 IP アドレス。
+
+    Returns:
+        dict:
+            "reached": bool — 宛先に到達できたか
+            "hops": list[str] — ホップのIPアドレスリスト
+            "hop_count": int — ホップ数
+            "raw_output": str — show コマンドの生テキスト出力
+    """
+    testbed = _load_testbed(testbed_yaml)
+    device = _connect_device(testbed, device_name)
+    try:
+        output: str = device.execute(f"traceroute {target}")
+        lines = output.splitlines()
+        hops: list[str] = []
+        reached = False
+
+        import re
+        for line in lines:
+            # IOS traceroute出力: "  1  10.0.12.2  4 msec  4 msec  4 msec"
+            match = re.search(r"\d+\s+(\d+\.\d+\.\d+\.\d+)", line)
+            if match:
+                hop_ip = match.group(1)
+                if hop_ip not in hops:
+                    hops.append(hop_ip)
+                if hop_ip == target:
+                    reached = True
+
+        return {
+            "reached": reached,
+            "hops": hops,
+            "hop_count": len(hops),
+            "raw_output": output,
+        }
+    finally:
+        device.disconnect()
+
+
+def check_bgp_path(testbed_yaml: str, device_name: str, prefix: str) -> dict:
+    """BGP ルーティングテーブルで指定プレフィックスの best path を確認する。
+
+    Args:
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+        device_name: 確認するデバイス名。
+        prefix: 確認するプレフィックス（例: "2.2.2.2/32"）。
+
+    Returns:
+        dict:
+            "found": bool — プレフィックスが BGP テーブルに存在するか
+            "best_next_hop": str — best path のネクストホップ
+            "origin": str — BGP origin (i=IGP, e=EGP, ?=incomplete)
+            "local_pref": int | None — Local preference 値
+            "raw": dict — Genie パース結果
+    """
+    raw = run_show_command(testbed_yaml, device_name, f"show bgp all {prefix}")
+
+    found = False
+    best_next_hop = ""
+    origin = ""
+    local_pref = None
+
+    # Genie パース結果構造:
+    # { "vrf": { "default": { "address_family": { "ipv4 unicast": {
+    #   "prefixes": { <prefix>: { "paths": { 1: {
+    #     "best_path": true, "next_hop": "...", "origin_codes": "i", ... } } } } } } } } }
+    try:
+        for vrf_data in raw.get("vrf", {}).values():
+            for af_data in vrf_data.get("address_family", {}).values():
+                for pfx, pfx_data in af_data.get("prefixes", {}).items():
+                    if prefix.split("/")[0] in pfx or pfx in prefix:
+                        found = True
+                        for path_data in pfx_data.get("paths", {}).values():
+                            if path_data.get("best_path"):
+                                best_next_hop = path_data.get("next_hop", "")
+                                origin = path_data.get("origin_codes", "")
+                                local_pref = path_data.get("localpref")
+                                break
+                        break
+    except (AttributeError, TypeError):
+        pass
+
+    return {
+        "found": found,
+        "best_next_hop": best_next_hop,
+        "origin": origin,
+        "local_pref": local_pref,
+        "raw": raw,
+    }
