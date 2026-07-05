@@ -380,6 +380,11 @@ def main() -> None:
     print(f"プロンプトセット: {prompt_set}")
     if use_rag:
         print(f"RAG: 有効")
+    print()
+    print("【要件】")
+    for line in requirement.splitlines():
+        print(f"  {line}")
+    print()
     print("処理を開始します...\n")
 
     app = compile_graph()
