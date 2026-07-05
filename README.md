@@ -67,7 +67,8 @@ agentic-ni/
 │       ├── tools/
 │       │   ├── __init__.py
 │       │   ├── cml_tools.py     # virl2_client ラッパー
-│       │   └── pyats_tools.py   # pyATS/Genie ラッパー
+       │   ├── pyats_tools.py   # pyATS/Genie ラッパー
+       │   └── rag_tools.py     # ベクトルRAG（ChromaDB）ラッパー
 │       │
 │       └── prompts/
 │          ├── default/                 # デフォルトプロンプトセット
@@ -684,6 +685,8 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | LLM API 認証エラー | `.env` の API キーが正しいか確認 |
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
+| `chromadb` が見つからない | `uv sync --extra rag` または `pip install chromadb` を実行 |
+| RAG検索が0件 | `agentic-ni --rag-stats` で保存件数を確認。初回実行時は空のため正常 |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
 ---
 
@@ -703,6 +706,8 @@ agentic-ni [オプション] [要件テキスト]
 |---|---|
 | `--prompt-set <名前>` | 使用するプロンプトセットを指定する（デフォルト: `default`） |
 | `--list-sets` | 利用可能なプロンプトセット一覧を表示して終了する |
+| `--use-rag` | 修正設計時に過去の成功事例をプロンプトに追加する（要 `chromadb`） |
+| `--rag-stats` | RAGストアの保存件数と保存場所を表示して終了する |
 | `-i` / `--interactive` | Human-in-the-Loop モードで実行する（最終レポートを人間が承認/却下） |
 
 ### 使用例
@@ -722,6 +727,12 @@ agentic-ni -i "R1とR2をOSPFで接続する"
 
 # プロンプトセット指定 + インタラクティブモード
 agentic-ni --prompt-set ospf_l3vpn -i "R1とR2をOSPFエリア0で接続する"
+
+# RAGを有効にして実行（成功時にエラー→成功設計の対応を自動保存）
+agentic-ni --use-rag "R1とR2をOSPFで接続する"
+
+# RAGストアの統計確認
+agentic-ni --rag-stats
 ```
 
 ### プロンプトセットの追加方法
@@ -755,9 +766,40 @@ app = compile_graph()
 result = app.invoke(initial_state(
     requirement="R1とR2をOSPFエリア0で接続する",
     prompt_set="default",   # 省略可（デフォルト: 'default'）
+    use_rag=True,           # 省略可（デフォルト: False）
 ))
 print(result["final_report"])
 ```
+
+### ベクトルRAG機能
+
+`--use-rag` を指定すると、過去の実行で発生したエラーと最終的に成功した設計を
+[ChromaDB](https://www.trychroma.com/) に保存し、次回以降の修正設計に活用します。
+
+**動作フロー**:
+```
+1回目の実行（--use-rag）:
+  エラー発生 → error_history に蓄積
+  全テストPASS → ChromaDB に (エラーログ, 成功設計) を保存
+
+2回目以降（--use-rag）:
+  修正設計が必要になったとき
+    → 現在のエラーで類似の過去事例を検索
+    → 上位3件をプロンプトに追加（類似度フィルタあり）
+    → 設計エージェントが過去事例を参考に修正
+```
+
+**インストール**（初回のみ）:
+```bash
+uv sync --extra rag
+# または
+pip install chromadb
+```
+
+> **初回実行時の注意**: chromadb はデフォルトで埋め込みモデル `all-MiniLM-L6-v2` を
+> HuggingFace から自動ダウンロードします（約90MB）。オフライン環境では事前にダウンロードが必要です。
+
+**保存場所**: `~/.agentic_ni/rag_store/`（`RAG_STORE_PATH` 環境変数で変更可能）
 
 ---
 

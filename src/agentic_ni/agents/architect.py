@@ -72,6 +72,43 @@ def list_prompt_sets() -> list[str]:
     )
 
 
+def _build_rag_context(error_log: str) -> str:
+    """類似過去事例をRAGで検索してプロンプト挿入用テキストを生成する。
+
+    chromadb が未インストール、またはストアが空の場合は空文字を返す。
+    """
+    try:
+        from agentic_ni.tools import rag_tools
+        cases = rag_tools.search_similar_errors(error_log, k=3)
+    except Exception:  # noqa: BLE001
+        return ""
+
+    if not cases:
+        return ""
+
+    lines = [
+        "### 過去の類似失敗事例（RAG参考情報）",
+        "以下は過去に類似エラーが発生し、最終的に成功した設計の例です。",
+        "修正のヒントとして活用してください。",
+        "",
+    ]
+    for i, case in enumerate(cases, 1):
+        similarity = 1.0 - case["distance"]
+        lines.append(f"#### 事例{i}（類似度: {similarity:.0%}）")
+        lines.append(f"要件: {case['requirement']}")
+        lines.append(f"\nエラー内容:\n```\n{case['past_error']}\n```")
+        configs = case["device_configs"]
+        if configs:
+            configs_text = "\n".join(
+                f"**{dev}**:\n```\n{cfg}\n```"
+                for dev, cfg in configs.items()
+            )
+            lines.append(f"\n最終成功コンフィグ:\n{configs_text}")
+        lines.append("---")
+
+    return "\n".join(lines)
+
+
 def _build_messages(state: AgentState) -> list[dict[str, str]]:
     """Stateからチャットメッセージリストを組み立てる。
 
@@ -99,6 +136,11 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
             f"```\n{state['error_log']}\n```\n\n"
             "修正点のみ変更し、問題のない箇所はそのまま維持してください。"
         )
+        # --- RAGコンテキスト付与（有効時のみ）---
+        if state.get("use_rag", False):
+            rag_context = _build_rag_context(state["error_log"])
+            if rag_context:
+                user_content += f"\n\n{rag_context}"
     else:
         # --- ゼロ設計モード ---
         user_content = (
@@ -142,6 +184,14 @@ def run(state: AgentState) -> dict[str, Any]:
     result: DesignOutput = structured_llm.invoke(messages)
 
     if state.get("error_log"):
+        if state.get("use_rag", False):
+            try:
+                from agentic_ni.tools import rag_tools
+                cases = rag_tools.search_similar_errors(state["error_log"], k=3)
+                if cases:
+                    print(f"  【RAG】 類似事例 {len(cases)} 件をプロンプトに追加しました。", flush=True)
+            except Exception:  # noqa: BLE001
+                pass
         print(f"  【設計方針】 {result.design_rationale}", flush=True)
 
     return {

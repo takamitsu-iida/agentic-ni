@@ -309,9 +309,15 @@ def run(state: AgentState) -> dict[str, Any]:
     else:
         print(f"  [4/4] 全テスト PASS", flush=True)
 
+    # error_history に今回のエラーを追記（RAG保存用）
+    error_history = list(state.get("error_history", []))
+    if error_log:
+        error_history.append(error_log)
+
     return {
         "lab_id": lab_id,
         "test_results": test_results,
         "error_log": error_log,
+        "error_history": error_history,
         "retry_count": new_retry_count,
     }

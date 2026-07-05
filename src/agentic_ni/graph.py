@@ -86,7 +86,28 @@ def report_node(state: AgentState) -> dict:
         f"{result_lines}\n\n"
         f"すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。"
     )
+    _save_to_rag(state)
     return {"final_report": report}
+
+
+def _save_to_rag(state: AgentState) -> None:
+    """成功した実行のエラー履歴をRAGストアに保存する。use_rag=False の場合は何もしない。"""
+    if not state.get("use_rag", False):
+        return
+    error_history = state.get("error_history", [])
+    if not error_history:
+        return
+    try:
+        from agentic_ni.tools import rag_tools
+        saved = rag_tools.save_successful_run(
+            requirement=state.get("requirement", ""),
+            error_history=error_history,
+            topology_yaml=state.get("topology_yaml", ""),
+            device_configs=state.get("device_configs", {}),
+        )
+        print(f"  >>> RAGストアに {saved} 件の事例を保存しました。", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  >>> RAG保存スキップ: {exc}", flush=True)
 
 
 def escalate_node(state: AgentState) -> dict:
@@ -254,16 +275,19 @@ def compile_graph_interactive():
     return build_graph(human_in_the_loop=True).compile(checkpointer=MemorySaver())
 
 
-def initial_state(requirement: str, prompt_set: str = "default") -> AgentState:
+def initial_state(requirement: str, prompt_set: str = "default", use_rag: bool = False) -> AgentState:
     """初期ステートを生成するファクトリー関数。
 
     Args:
         requirement: ネットワーク要件の自然言語テキスト。
         prompt_set: 使用するプロンプトセット名（prompts/ 配下のサブディレクトリ名）。
+        use_rag: True の場合、修正設計時に過去の類似成功事例をプロンプトに追加する。
     """
     return AgentState(
         requirement=requirement,
         prompt_set=prompt_set,
+        use_rag=use_rag,
+        error_history=[],
         topology_yaml="",
         device_configs={},
         lab_id="",
@@ -289,7 +313,17 @@ def main() -> None:
             print(f"  - {s}")
         return
 
+    # --rag-stats: RAGストアの統計情報を表示して終了
+    if "--rag-stats" in args:
+        from agentic_ni.tools import rag_tools
+        stats = rag_tools.get_store_stats()
+        print(f"RAGストア統計:")
+        print(f"  保存済み事例数: {stats['total_cases']} 件")
+        print(f"  保存場所: {stats['db_path']}")
+        return
+
     interactive = "--interactive" in args or "-i" in args
+    use_rag = "--use-rag" in args
 
     # --prompt-set <name> の解析
     prompt_set = "default"
@@ -303,7 +337,7 @@ def main() -> None:
             sys.exit(1)
 
     # 残りの引数をスペース結合して要件とする
-    filtered = [a for a in args if a not in ("--interactive", "-i")]
+    filtered = [a for a in args if a not in ("--interactive", "-i", "--use-rag")]
     requirement = " ".join(filtered) or "R1とR2をOSPFで接続する"
 
     if interactive:
@@ -314,9 +348,11 @@ def main() -> None:
 
         print(f"要件: {requirement}")
         print(f"プロンプトセット: {prompt_set}")
+        if use_rag:
+            print(f"RAG: 有効")
         print("処理を開始します...\n")
 
-        for event in app.stream(initial_state(requirement, prompt_set), config):
+        for event in app.stream(initial_state(requirement, prompt_set, use_rag), config):
             for node_name, state_update in event.items():
                 if node_name == "__interrupt__":
                     payload = state_update[0].value
@@ -336,7 +372,7 @@ def main() -> None:
                     )
     else:
         app = compile_graph()
-        result = app.invoke(initial_state(requirement, prompt_set))
+        result = app.invoke(initial_state(requirement, prompt_set, use_rag))
         print(result.get("final_report", "(レポートなし)"))
 
 

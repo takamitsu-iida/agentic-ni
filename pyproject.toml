@@ -24,6 +24,9 @@ network = [
     "pyats>=24.0",
     "genie>=24.0",
 ]
+rag = [
+    "chromadb>=0.5",
+]
 
 [project.scripts]
 agentic-ni = "agentic_ni.graph:main"

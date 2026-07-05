@@ -23,6 +23,12 @@ class AgentState(TypedDict):
     prompt_set: str
     """使用するプロンプトセット名。prompts/<prompt_set>/ ディレクトリのサブフォルダ名。デフォルト: 'default'"""
 
+    use_rag: bool
+    """過去の成功事例をベクトルRAGで検索して設計エージェントのプロンプトに追加するかどうか。"""
+
+    error_history: list[str]
+    """今回の実行中に発生した error_log の履歴。成功時にRAGストアに保存するために使用。"""
+
     # --- 設計エージェント出力 ---
     topology_yaml: str
     """CMLに読み込ませるトポロジー定義（YAML文字列）。"""
