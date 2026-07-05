@@ -170,11 +170,17 @@ def _execute_test(item: TestItem, testbed_yaml: str) -> TestResult:
         elif item.test_type == "bgp_summary":
             data = pyats_tools.check_bgp_summary(testbed_yaml, item.device)
             ok = data["peers_established"] > 0
-            detail = (
-                f"{data['peers_established']} peer(s) Established"
-                if ok
-                else f"peers_established=0, peers={data.get('peers', [])}"
-            )
+            if ok:
+                detail = f"{data['peers_established']} peer(s) Established"
+            else:
+                peers = data.get("peers", [])
+                if peers:
+                    peer_info = ", ".join(
+                        f"{p['peer']}:state={p.get('state', '?')}" for p in peers
+                    )
+                    detail = f"peers_established=0 ({peer_info})"
+                else:
+                    detail = "peers_established=0 (BGPピアが未検出: neighbor設定がない、またはセッションが開始されていない可能性)"
 
         elif item.test_type == "ping":
             if not item.target:
