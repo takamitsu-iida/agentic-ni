@@ -20,6 +20,9 @@ class AgentState(TypedDict):
     requirement: str
     """人間が入力した要件（自然言語）。"""
 
+    prompt_set: str
+    """使用するプロンプトセット名。prompts/<prompt_set>/ ディレクトリのサブフォルダ名。デフォルト: 'default'"""
+
     # --- 設計エージェント出力 ---
     topology_yaml: str
     """CMLに読み込ませるトポロジー定義（YAML文字列）。"""

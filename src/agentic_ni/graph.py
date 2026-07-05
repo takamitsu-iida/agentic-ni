@@ -254,10 +254,16 @@ def compile_graph_interactive():
     return build_graph(human_in_the_loop=True).compile(checkpointer=MemorySaver())
 
 
-def initial_state(requirement: str) -> AgentState:
-    """初期ステートを生成するファクトリー関数。"""
+def initial_state(requirement: str, prompt_set: str = "default") -> AgentState:
+    """初期ステートを生成するファクトリー関数。
+
+    Args:
+        requirement: ネットワーク要件の自然言語テキスト。
+        prompt_set: 使用するプロンプトセット名（prompts/ 配下のサブディレクトリ名）。
+    """
     return AgentState(
         requirement=requirement,
+        prompt_set=prompt_set,
         topology_yaml="",
         device_configs={},
         lab_id="",
@@ -272,8 +278,33 @@ def main() -> None:
     """CLI エントリポイント。"""
     import sys
 
-    requirement = " ".join(sys.argv[1:]) or "R1とR2をOSPFで接続する"
-    interactive = "--interactive" in sys.argv or "-i" in sys.argv
+    args = sys.argv[1:]
+
+    # --list-sets: 利用可能なプロンプトセット一覧を表示して終了
+    if "--list-sets" in args:
+        from agentic_ni.agents.architect import list_prompt_sets
+        sets = list_prompt_sets()
+        print("利用可能なプロンプトセット:")
+        for s in sets:
+            print(f"  - {s}")
+        return
+
+    interactive = "--interactive" in args or "-i" in args
+
+    # --prompt-set <name> の解析
+    prompt_set = "default"
+    if "--prompt-set" in args:
+        idx = args.index("--prompt-set")
+        if idx + 1 < len(args):
+            prompt_set = args[idx + 1]
+            args = args[:idx] + args[idx + 2:]
+        else:
+            print("エラー: --prompt-set の後にセット名を指定してください。", file=sys.stderr)
+            sys.exit(1)
+
+    # 残りの引数をスペース結合して要件とする
+    filtered = [a for a in args if a not in ("--interactive", "-i")]
+    requirement = " ".join(filtered) or "R1とR2をOSPFで接続する"
 
     if interactive:
         import uuid
@@ -282,9 +313,10 @@ def main() -> None:
         config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
         print(f"要件: {requirement}")
+        print(f"プロンプトセット: {prompt_set}")
         print("処理を開始します...\n")
 
-        for event in app.stream(initial_state(requirement), config):
+        for event in app.stream(initial_state(requirement, prompt_set), config):
             for node_name, state_update in event.items():
                 if node_name == "__interrupt__":
                     payload = state_update[0].value
@@ -304,7 +336,7 @@ def main() -> None:
                     )
     else:
         app = compile_graph()
-        result = app.invoke(initial_state(requirement))
+        result = app.invoke(initial_state(requirement, prompt_set))
         print(result.get("final_report", "(レポートなし)"))
 
 

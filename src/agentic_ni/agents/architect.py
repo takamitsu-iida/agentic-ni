@@ -53,10 +53,23 @@ class DesignOutput(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _load_system_prompt() -> str:
-    """architect_system.md を読み込んで返す。"""
-    path = _PROMPTS_DIR / "architect_system.md"
+def _load_system_prompt(prompt_set: str = "default") -> str:
+    """指定されたプロンプトセットの architect_system.md を読み込んで返す。"""
+    path = _PROMPTS_DIR / prompt_set / "architect_system.md"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"プロンプトセット '{prompt_set}' が見つかりません: {path}\n"
+            f"利用可能なセット: {list_prompt_sets()}"
+        )
     return path.read_text(encoding="utf-8")
+
+
+def list_prompt_sets() -> list[str]:
+    """利用可能なプロンプトセット一覧を返す。"""
+    return sorted(
+        d.name for d in _PROMPTS_DIR.iterdir()
+        if d.is_dir() and (d / "architect_system.md").exists()
+    )
 
 
 def _build_messages(state: AgentState) -> list[dict[str, str]]:
@@ -65,7 +78,7 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
     * error_log が空 → 要件からゼロ設計
     * error_log に内容あり → 差分修正モード
     """
-    system_prompt = _load_system_prompt()
+    system_prompt = _load_system_prompt(state.get("prompt_set", "default"))
 
     if state.get("error_log"):
         # --- 差分修正モード ---

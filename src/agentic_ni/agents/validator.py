@@ -57,14 +57,27 @@ class FailureAnalysis(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _load_system_prompt() -> str:
-    path = _PROMPTS_DIR / "validator_system.md"
+def _load_system_prompt(prompt_set: str = "default") -> str:
+    path = _PROMPTS_DIR / prompt_set / "validator_system.md"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"プロンプトセット '{prompt_set}' が見つかりません: {path}\n"
+            f"利用可能なセット: {list_prompt_sets()}"
+        )
     return path.read_text(encoding="utf-8")
+
+
+def list_prompt_sets() -> list[str]:
+    """利用可能なプロンプトセット一覧を返す。"""
+    return sorted(
+        d.name for d in _PROMPTS_DIR.iterdir()
+        if d.is_dir() and (d / "validator_system.md").exists()
+    )
 
 
 def _build_test_plan_messages(state: AgentState) -> list[dict[str, str]]:
     """テスト計画立案用のメッセージを組み立てる。"""
-    system_prompt = _load_system_prompt()
+    system_prompt = _load_system_prompt(state.get("prompt_set", "default"))
     nodes_info = "\n".join(
         f"- {dev}" for dev in state.get("device_configs", {}).keys()
     )
@@ -87,7 +100,7 @@ def _build_analysis_messages(
     state: AgentState, failed_results: list[TestResult]
 ) -> list[dict[str, str]]:
     """失敗分析用のメッセージを組み立てる。"""
-    system_prompt = _load_system_prompt()
+    system_prompt = _load_system_prompt(state.get("prompt_set", "default"))
     failures_text = "\n".join(
         f"- [{r['test']}] {r['detail']}" for r in failed_results
     )
