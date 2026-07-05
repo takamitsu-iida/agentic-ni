@@ -328,14 +328,12 @@ def main() -> None:
             "  --list               利用可能なプロンプトセット一覧を表示して終了する\n"
             "  --use-rag            修正設計時に過去の成功事例をプロンプトに追加する（要 chromadb）\n"
             "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
-            "  -i / --interactive   Human-in-the-Loop モードで実行する\n"
             "  -h / --help          このヘルプを表示して終了する\n"
             "\n"
             "例:\n"
             "  agentic-ni demo                  # demo セットの要件で実行\n"
             "  agentic-ni ospf_l3vpn            # ospf_l3vpn セットの要件で実行\n"
             "  agentic-ni demo --use-rag        # RAGを有効にして実行\n"
-            "  agentic-ni demo -i               # Human-in-the-Loop モードで実行\n"
             "  agentic-ni --list\n"
             "  agentic-ni --rag-stats"
         )
@@ -359,7 +357,6 @@ def main() -> None:
         print(f"  保存場所: {stats['db_path']}")
         return
 
-    interactive = "--interactive" in args or "-i" in args
     use_rag = "--use-rag" in args
 
     # 位置引数（フラグ以外）= プロンプトセット名
@@ -380,40 +377,14 @@ def main() -> None:
         print(f"エラー: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    if interactive:
-        import uuid
+    print(f"プロンプトセット: {prompt_set}")
+    if use_rag:
+        print(f"RAG: 有効")
+    print("処理を開始します...\n")
 
-        app = compile_graph_interactive()
-        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-
-        print(f"要件: {requirement}")
-        print(f"プロンプトセット: {prompt_set}")
-        if use_rag:
-            print(f"RAG: 有効")
-        print("処理を開始します...\n")
-
-        for event in app.stream(initial_state(requirement, prompt_set, use_rag), config):
-            for node_name, state_update in event.items():
-                if node_name == "__interrupt__":
-                    payload = state_update[0].value
-                    print("\n" + "=" * 60)
-                    print(payload.get("message", ""))
-                    print("\n--- レポート ---")
-                    print(payload.get("final_report", ""))
-                    print("=" * 60)
-                    choice = input("\n承認しますか？ [y/N]: ").strip().lower()
-                    reason = ""
-                    if choice != "y":
-                        reason = input("却下理由を入力してください: ").strip()
-                    app.invoke(
-                        {"approved": choice == "y", "reason": reason},
-                        config,
-                        command={"resume": {"approved": choice == "y", "reason": reason}},
-                    )
-    else:
-        app = compile_graph()
-        result = app.invoke(initial_state(requirement, prompt_set, use_rag))
-        print(result.get("final_report", "(レポートなし)"))
+    app = compile_graph()
+    result = app.invoke(initial_state(requirement, prompt_set, use_rag))
+    print(result.get("final_report", "(レポートなし)"))
 
 
 if __name__ == "__main__":

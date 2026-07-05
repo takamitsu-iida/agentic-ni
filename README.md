@@ -718,7 +718,6 @@ CLI引数として要件テキストを渡すことはできません。
 | `--list` | 利用可能なプロンプトセット一覧を表示して終了する |
 | `--use-rag` | 修正設計時に過去の成功事例をプロンプトに追加する（要 `chromadb`） |
 | `--rag-stats` | RAGストアの保存件数と保存場所を表示して終了する |
-| `-i` / `--interactive` | Human-in-the-Loop モードで実行する（最終レポートを人間が承認/却下） |
 | `-h` / `--help` | ヘルプを表示して終了する |
 
 ### 使用例
@@ -732,12 +731,6 @@ agentic-ni --list
 
 # プロンプトセットを指定して実行（そのセットの requirement.md が使われる）
 agentic-ni static
-
-# Human-in-the-Loop モードで実行（最終レポートを承認/却下）
-agentic-ni demo -i
-
-# プロンプトセット指定 + インタラクティブモード
-agentic-ni static -i
 
 # RAGを有効にして実行（成功時にエラー→成功設計の対応を自動保存）
 agentic-ni demo --use-rag
