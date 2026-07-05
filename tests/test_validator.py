@@ -263,7 +263,7 @@ class TestDeploy:
             result = _deploy(state)
 
         assert result == "lab-001"
-        mdeploy.assert_called_once_with(_SAMPLE_TOPOLOGY, {"R1": "cfg1", "R2": "cfg2"})
+        mdeploy.assert_called_once_with(_SAMPLE_TOPOLOGY, {"R1": "cfg1", "R2": "cfg2"}, title="agentic-ni-demo")
 
     def test_raises_when_nodes_not_ready(self):
         """deploy_lab が RuntimeError を送出した場合に _deploy が伝播させること。"""

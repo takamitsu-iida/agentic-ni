@@ -245,7 +245,8 @@ def _deploy(state: AgentState) -> str:
             pass
 
     # 内部で起動待ちまで完了する
-    lab_id = cml_tools.deploy_lab(topology_yaml, device_configs)
+    lab_title = f"agentic-ni-{state.get('prompt_set', 'demo')}"
+    lab_id = cml_tools.deploy_lab(topology_yaml, device_configs, title=lab_title)
     return lab_id
 
 
