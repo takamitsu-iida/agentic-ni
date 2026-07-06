@@ -403,6 +403,7 @@ def run(state: AgentState) -> dict[str, Any]:
     return {
         "lab_id": lab_id,
         "test_results": test_results,
+        "test_plan_items": [item.model_dump() for item in plan.tests],
         "error_log": error_log,
         "error_history": error_history,
         "retry_count": new_retry_count,
