@@ -94,7 +94,7 @@ def report_node(state: AgentState) -> dict:
 
 
 def _save_to_rag(state: AgentState) -> None:
-    """(deprecated: --use-rag 廃止により何もしない。)"""
+    """(deprecated: 実行ログ RAG 機能は廃止されました。何もしない。)"""
     return
 
 
@@ -685,7 +685,6 @@ def main() -> None:
             "  agentic-ni demo                  # demo セットの要件で実行\n"
             "  agentic-ni ospf_l3vpn            # ospf_l3vpn セットの要件で実行\n"
             "  agentic-ni demo --dry-run          # CMLなしでコンフィグ生成のみ\n"
-            "  agentic-ni demo --use-rag        # RAGを有効にして実行\n"
             "  agentic-ni demo2 --fault-sim     # 障害シミュレーションありで実行\n"
             "  agentic-ni demo2 --troubleshoot        # demo2 ラボをタイトルで自動検索しトラブルシュート\n"
             "  agentic-ni demo2 --troubleshoot abc-1234  # lab_id を明示してトラブルシュート\n"
