@@ -2,20 +2,22 @@
 
 以下を**毎回すべて実行すること**（前回の試行結果に関わらず省略しない）:
 
-1. R1 の `vlan_interfaces`（VLAN10インターフェースが up/up であること）
-2. R2 の `vlan_interfaces`（VLAN20インターフェースが up/up であること）
-3. R1 から R2のVLAN20のIPへの `ping`
-4. R2 から R1のVLAN10のIPへの `ping`
+1. R1 の GigabitEthernet0/0インターフェースが up/up であること
+2. R1 の GigabitEthernet0/1インターフェースが up/up であること
+3. R2 の GigabitEthernet0/0インターフェースが up/up であること
+4. R2 の GigabitEthernet0/1インターフェースが up/up であること
+5. R1の背後にいるホストから、R2の背後にいるホストへの `ping`
 
 ※ 実際のIPアドレスは機器コンフィグから読み取って使用すること。
 
+
+## ホスト間のpingが失敗する場合
+
+- ホストから見て直近のゲートウェイにpingが通るか確認すること
+
 ## このセット固有の失敗パターン
 
-- **VLANインターフェースが up にならない**:
-  - サブインターフェースの `encapsulation dot1q <vlan-id>` 設定漏れ
-  - VLAN IDの不一致
-
-- **pingが通らない**:
+- ホストから**pingが通らない**:
   - スタティックルートの設定漏れまたはnexthopアドレスの誤り
   - ルーティングが片方向のみ（R1→R2 は通るがR2→R1 は通らない等）
   - インターフェースIPアドレスの設定ミス
