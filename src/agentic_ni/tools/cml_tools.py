@@ -414,6 +414,29 @@ def wait_for_nodes_ready(lab_id: str, timeout: int = 300) -> bool:
     return False
 
 
+def find_lab_by_title(title: str) -> str | None:
+    """指定したタイトルのラボ ID を返す。
+
+    deploy_lab で作成されるラボのタイトルは "agentic-ni-{prompt_set}" 形式のため、
+    `--troubleshoot` に lab_id が省略された場合にタイトルでラボを特定できる。
+    同名ラボが複数ある場合は最初に見つかったものを返す。
+
+    Args:
+        title: 検索するラボタイトル。
+
+    Returns:
+        str | None: 見つかった場合はラボ ID、存在しない場合は None。
+
+    Raises:
+        EnvironmentError: CML 接続情報が未設定の場合。
+    """
+    client = _get_client()
+    for lab in client.all_labs():
+        if lab.title == title:
+            return lab.id
+    return None
+
+
 def get_lab_nodes(lab_id: str) -> list[dict]:
     """ラボ内のノード一覧とその状態を返す。
 

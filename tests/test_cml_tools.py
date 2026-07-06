@@ -354,3 +354,61 @@ class TestGetLabInfo:
             "interface_a": "GigabitEthernet0/0",
             "interface_b": "GigabitEthernet0/0",
         }
+
+
+# ---------------------------------------------------------------------------
+# find_lab_by_title
+# ---------------------------------------------------------------------------
+
+
+class TestFindLabByTitle:
+    def _make_lab_mock(self, title: str, lab_id: str) -> MagicMock:
+        lab = MagicMock()
+        lab.title = title
+        lab.id = lab_id
+        return lab
+
+    def test_returns_lab_id_when_found(self, monkeypatch):
+        lab_a = self._make_lab_mock("agentic-ni-demo", "lab-001")
+        lab_b = self._make_lab_mock("other-lab", "lab-002")
+        mock_client = MagicMock()
+        mock_client.all_labs.return_value = [lab_a, lab_b]
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client):
+            from agentic_ni.tools.cml_tools import find_lab_by_title
+            result = find_lab_by_title("agentic-ni-demo")
+
+        assert result == "lab-001"
+
+    def test_returns_none_when_not_found(self, monkeypatch):
+        lab = self._make_lab_mock("some-other-lab", "lab-999")
+        mock_client = MagicMock()
+        mock_client.all_labs.return_value = [lab]
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client):
+            from agentic_ni.tools.cml_tools import find_lab_by_title
+            result = find_lab_by_title("agentic-ni-demo")
+
+        assert result is None
+
+    def test_returns_first_match_when_multiple(self, monkeypatch):
+        lab_a = self._make_lab_mock("agentic-ni-demo", "lab-first")
+        lab_b = self._make_lab_mock("agentic-ni-demo", "lab-second")
+        mock_client = MagicMock()
+        mock_client.all_labs.return_value = [lab_a, lab_b]
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client):
+            from agentic_ni.tools.cml_tools import find_lab_by_title
+            result = find_lab_by_title("agentic-ni-demo")
+
+        assert result == "lab-first"
+
+    def test_returns_none_for_empty_lab_list(self, monkeypatch):
+        mock_client = MagicMock()
+        mock_client.all_labs.return_value = []
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client):
+            from agentic_ni.tools.cml_tools import find_lab_by_title
+            result = find_lab_by_title("agentic-ni-demo")
+
+        assert result is None

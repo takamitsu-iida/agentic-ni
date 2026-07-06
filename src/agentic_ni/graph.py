@@ -693,8 +693,8 @@ def main() -> None:
             "  --dry-run            CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
             "  --use-rag            修正設計時に過去の成功事例をプロンプトに追加する（要 chromadb）\n"
             "  --fault-sim          構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
-            "  --troubleshoot <ID>  既存ラボに対してトラブルシューティングモードを実行する\n"
-            "  --issue '<説明>'     --troubleshoot の問題説明（自然言語、任意）\n"
+            "  --troubleshoot [ID]  既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索）\n"
+            "  --issue '<説明>'     --troubleshoot と併用する問題の説明（任意）\n"
             "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
             "  -h / --help          このヘルプを表示して終了する\n"
             "\n"
@@ -704,7 +704,9 @@ def main() -> None:
             "  agentic-ni demo --dry-run          # CMLなしでコンフィグ生成のみ\n"
             "  agentic-ni demo --use-rag        # RAGを有効にして実行\n"
             "  agentic-ni demo2 --fault-sim     # 障害シミュレーションありで実行\n"
-            "  agentic-ni demo2 --troubleshoot abc-1234  # 存在ラボをトラブルシュート\n"
+            "  agentic-ni demo2 --troubleshoot        # demo2 ラボをタイトルで自動検索しトラブルシュート\n"
+            "  agentic-ni demo2 --troubleshoot abc-1234  # lab_id を明示してトラブルシュート\n"
+            "  agentic-ni demo2 --troubleshoot --issue 'OSPFが確立しない'  # 問題説明付き\n"
             "  agentic-ni --list\n"
             "  agentic-ni --rag-stats"
         )
@@ -732,17 +734,26 @@ def main() -> None:
     dry_run = "--dry-run" in args
     fault_simulation_enabled = "--fault-sim" in args
 
-    # --troubleshoot <lab_id>: トラブルシューティングモード
+    # --troubleshoot [ラボID] / --issue '説明' のパース
+    # lab_id は省略可（省略時はラボタイトルで自動検索）
+    troubleshoot_mode: bool = "--troubleshoot" in args
     troubleshoot_lab_id: str | None = None
     troubleshoot_issue: str = ""
+    # フラグが消費する値（positionals から除外する）
+    _flag_consumed: set[str] = set()
     for i, arg in enumerate(args):
         if arg == "--troubleshoot" and i + 1 < len(args) and not args[i + 1].startswith("-"):
             troubleshoot_lab_id = args[i + 1]
+            _flag_consumed.add(args[i + 1])
         if arg == "--issue" and i + 1 < len(args) and not args[i + 1].startswith("-"):
             troubleshoot_issue = args[i + 1]
+            _flag_consumed.add(args[i + 1])
 
-    # 位置引数（フラグ以外）= プロンプトセット名
-    positional = [a for a in args if not a.startswith("-")]
+    # 位置引数（フラグ以外かつフラグの値でないもの）= プロンプトセット名
+    positional = [
+        a for a in args
+        if not a.startswith("-") and a not in _flag_consumed
+    ]
     if not positional:
         print("エラー: プロンプトセット名を指定してください。", file=sys.stderr)
         print("  利用可能なセット確認: agentic-ni --list", file=sys.stderr)
@@ -766,8 +777,11 @@ def main() -> None:
         print(f"RAG: 有効")
     if fault_simulation_enabled:
         print("障害シミュレーション: 有効")
-    if troubleshoot_lab_id:
-        print(f"トラブルシューティングモード: ラボID={troubleshoot_lab_id}")
+    if troubleshoot_mode:
+        if troubleshoot_lab_id:
+            print(f"トラブルシューティングモード: ラボID={troubleshoot_lab_id}")
+        else:
+            print("トラブルシューティングモード: ラボ自動検索")
         if troubleshoot_issue:
             print(f"問題説明: {troubleshoot_issue}")
     print()
@@ -778,7 +792,25 @@ def main() -> None:
     print("処理を開始します...\n")
 
     # トラブルシューティングモード
-    if troubleshoot_lab_id:
+    if troubleshoot_mode:
+        if not troubleshoot_lab_id:
+            # lab_id 省略時はラボタイトル "agentic-ni-{prompt_set}" で自動検索
+            lab_title = f"agentic-ni-{prompt_set}"
+            from agentic_ni.tools import cml_tools as _cml
+            found = _cml.find_lab_by_title(lab_title)
+            if found is None:
+                print(
+                    f"エラー: ラボ '{lab_title}' が見つかりません。",
+                    file=sys.stderr,
+                )
+                print(
+                    f"  先に通常モードで実行してラボを作成するか、--troubleshoot に lab_id を明示してください。",
+                    file=sys.stderr,
+                )
+                print(f"    利用例: agentic-ni {prompt_set}", file=sys.stderr)
+                sys.exit(1)
+            troubleshoot_lab_id = found
+            print(f"ラボを自動検出: {lab_title} (ID={troubleshoot_lab_id})")
         app = compile_graph_troubleshoot()
         result = app.invoke(
             initial_state_troubleshoot(troubleshoot_lab_id, troubleshoot_issue, prompt_set)
