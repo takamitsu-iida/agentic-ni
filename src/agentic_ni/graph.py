@@ -696,6 +696,8 @@ def main() -> None:
             "  --fault-sim          構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
             "  --troubleshoot [ID]  既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索）\n"
             "  --issue '<説明>'     --troubleshoot と併用する問題の説明（任意）\n"
+            "  --rag-index [<dir>]  rag/ のテキストファイルを知識ベースに索引化する（要 chromadb）\n"
+            "  --rag-clear-knowledge 知識ベースのインデックスを全消去する\n"
             "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
             "  -h / --help          このヘルプを表示して終了する\n"
             "\n"
@@ -727,8 +729,34 @@ def main() -> None:
         from agentic_ni.tools import rag_tools
         stats = rag_tools.get_store_stats()
         print(f"RAGストア統計:")
-        print(f"  保存済み事例数: {stats['total_cases']} 件")
+        print(f"  実行ログ RAG (成功事例): {stats['total_cases']} 件")
+        print(f"  知識ベース RAG (テキストファイル): {stats.get('knowledge_chunks', 0)} チャンク")
         print(f"  保存場所: {stats['db_path']}")
+        return
+
+    # --rag-index [ディレクトリ]: 知識ベースを索引化して終了
+    if "--rag-index" in args:
+        from agentic_ni.tools import rag_tools
+        # --rag-index の次の引数はディレクトリパス（省略時は "rag")
+        rag_index_dir = "rag"
+        for i, arg in enumerate(args):
+            if arg == "--rag-index" and i + 1 < len(args) and not args[i + 1].startswith("-"):
+                rag_index_dir = args[i + 1]
+                break
+        try:
+            print(f"知識ベースを索引化中: {rag_index_dir}")
+            count = rag_tools.index_knowledge_files(rag_index_dir)
+            print(f"完了: 合計 {count} チャンクを知識ベースに登録しました。")
+        except FileNotFoundError as exc:
+            print(f"エラー: {exc}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # --rag-clear-knowledge: 知識ベースを全消去して終了
+    if "--rag-clear-knowledge" in args:
+        from agentic_ni.tools import rag_tools
+        rag_tools.clear_knowledge_base()
+        print("知識ベースのインデックスを全消去しました。")
         return
 
     use_rag = "--use-rag" in args

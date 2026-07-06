@@ -170,6 +170,20 @@ def _build_diagnosis_messages(
         "根本原因を特定し、診断結果を返してください。\n"
         "これまでの修正試行がある場合は、それらを考慮して新しい根本原因を推論してください。"
     )
+
+    # 知識ベースコンテキスト付与（インデックス済みなら自動）
+    query = state.get("troubleshoot_issue") or state.get("requirement", "")
+    try:
+        from agentic_ni.tools import rag_tools
+        knowledge = rag_tools.search_knowledge(query, k=3)
+        if knowledge:
+            knowledge_text = "\n\n".join(
+                f"**{k['source_file']}** （関連度: {1.0 - k['distance']:.0%}）\n```\n{k['content']}\n```"
+                for k in knowledge
+            )
+            user_content += f"\n\n### 参考資料（知識ベース）\n{knowledge_text}"
+    except Exception:  # noqa: BLE001
+        pass
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},

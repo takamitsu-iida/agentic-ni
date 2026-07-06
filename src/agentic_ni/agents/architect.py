@@ -129,6 +129,35 @@ def _build_rag_context(error_log: str) -> str:
     return "\n".join(lines)
 
 
+def _build_knowledge_context(requirement: str) -> str:
+    """知識ベースから関連情報を検索してプロンプト挿入用テキストを生成する。
+
+    rag/ ディレクトリがインデックス済みの場合のみ結果を返す。
+    インデックスが空または chromadb が未インストールの場合は空文字を返す。
+    """
+    try:
+        from agentic_ni.tools import rag_tools
+        knowledge = rag_tools.search_knowledge(requirement, k=3)
+    except Exception:  # noqa: BLE001
+        return ""
+
+    if not knowledge:
+        return ""
+
+    lines = [
+        "### 参考資料（社内標準・設計ガイド）",
+        "以下は知識ベースから検索された参考情報です。設計の参考にしてください。",
+        "",
+    ]
+    for item in knowledge:
+        similarity = 1.0 - item["distance"]
+        lines.append(f"**出典: {item['source_file']}**（関連度: {similarity:.0%}）")
+        lines.append(f"```\n{item['content']}\n```")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def _build_messages(state: AgentState) -> list[dict[str, str]]:
     """Stateからチャットメッセージリストを組み立てる。
 
@@ -161,6 +190,10 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
             rag_context = _build_rag_context(state["error_log"])
             if rag_context:
                 user_content += f"\n\n{rag_context}"
+        # --- 知識ベースコンテキスト付与（インデックス済みなら自動）---
+        knowledge_context = _build_knowledge_context(state["requirement"])
+        if knowledge_context:
+            user_content += f"\n\n{knowledge_context}"
     else:
         # --- ゼロ設計モード ---
         user_content = (
@@ -170,6 +203,10 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
             f"{state['requirement']}\n\n"
             "CMLトポロジーYAMLと各機器の初期コンフィグを生成してください。"
         )
+        # --- 知識ベースコンテキスト付与（インデックス済みなら自動）---
+        knowledge_context = _build_knowledge_context(state["requirement"])
+        if knowledge_context:
+            user_content += f"\n\n{knowledge_context}"
 
     return [
         {"role": "system", "content": system_prompt},
