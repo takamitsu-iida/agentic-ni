@@ -42,13 +42,25 @@ _SUPPORTED_EXTENSIONS = {".txt", ".md", ".json"}
 
 
 def _get_client():
-    """ChromaDB PersistentClient を返す（遅延インポート）。"""
+    """ChromaDB PersistentClient を返す（遅延インポート）。
+
+    古い SQLite 環境（< 3.35.0）では pysqlite3-binary でモンキーパッチする。
+    """
+    # SQLite バージョンチェック: chromadb は sqlite3 >= 3.35.0 を要求する
+    # 古い環境では pysqlite3-binary で代替する（標準的な回避策）
+    try:
+        import pysqlite3  # type: ignore[import-untyped]
+        import sys
+        sys.modules["sqlite3"] = pysqlite3
+    except ImportError:
+        pass  # pysqlite3-binary 未インストール時はシステムの sqlite3 を使用
+
     try:
         import chromadb
     except ImportError as exc:
         raise ImportError(
             "chromadb が未インストールです。\n"
-            "  uv sync --extra rag  または  pip install chromadb  を実行してください。"
+            "  uv sync --extra rag  または  pip install chromadb pysqlite3-binary  を実行してください。"
         ) from exc
 
     db_dir = Path(os.environ.get("RAG_STORE_PATH", str(_DEFAULT_DB_DIR)))
@@ -236,8 +248,8 @@ def clear_knowledge_base() -> None:
     client = _get_client()
     try:
         client.delete_collection(name=_KNOWLEDGE_COLLECTION_NAME)
-    except ValueError:
-        pass  # コレクションが存在しない場合は何もしない
+    except Exception:  # noqa: BLE001
+        pass  # コレクションが存在しない場合は何もしない（chromadb バージョンに依存しない）
 
 
 # ---------------------------------------------------------------------------

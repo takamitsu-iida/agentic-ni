@@ -26,6 +26,7 @@ network = [
 ]
 rag = [
     "chromadb>=0.5",
+    "pysqlite3-binary>=0.5",
 ]
 
 [project.scripts]

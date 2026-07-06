@@ -14,12 +14,21 @@ import pytest
 
 
 def _make_in_memory_collection():
-    """テスト用インメモリ ChromaDB コレクションを返す。"""
+    """テスト用インメモリ ChromaDB コレクションを返す（テストごとに一意な名前）。"""
+    import uuid
     try:
+        # pysqlite3-binary で sqlite3 を差し替え（古い環境向け）
+        try:
+            import pysqlite3  # type: ignore[import-untyped]
+            import sys
+            sys.modules["sqlite3"] = pysqlite3
+        except ImportError:
+            pass
         import chromadb
-        client = chromadb.Client()  # ephemeral (in-memory)
+        client = chromadb.EphemeralClient()  # ephemeral (in-memory)
+        col_name = f"test_{uuid.uuid4().hex[:8]}"
         return client.get_or_create_collection(
-            name="test_knowledge",
+            name=col_name,
             metadata={"hnsw:space": "cosine"},
         )
     except ImportError:
@@ -28,9 +37,16 @@ def _make_in_memory_collection():
 
 def _is_chromadb_available() -> bool:
     try:
+        # pysqlite3-binary で sqlite3 を差し替え（古い環境向け）
+        try:
+            import pysqlite3  # type: ignore[import-untyped]
+            import sys
+            sys.modules["sqlite3"] = pysqlite3
+        except ImportError:
+            pass
         import chromadb  # noqa: F401
         return True
-    except ImportError:
+    except (ImportError, RuntimeError):
         return False
 
 
