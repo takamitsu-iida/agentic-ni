@@ -1,7 +1,7 @@
 """LangGraph グラフの組み立て。
 
 Phase 7: Human-in-the-Loop、レポートフォーマット整備、E2E統合済み。
-Phase B: 障害シミュレーション（リンク断・復旧・再テスト）対応済み。
+障害シミュレーション（リンク断・復旧・再テスト）対応済み。
 """
 
 from __future__ import annotations
@@ -112,27 +112,27 @@ def _save_to_rag(state: AgentState) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase B ノード定義
+# 障害シミュレーション ノード定義
 # ---------------------------------------------------------------------------
 
 
 def fault_simulate_node(state: AgentState) -> dict:
-    """Phase B: 障害シミュレーションエージェント。リンク断/復旧テストを実行する。"""
+    """障害シミュレーションエージェント。インターフェース shutdown/no shutdown + 再テストを実行する。"""
     print(f"\n{'='*60}", flush=True)
-    print("[Phase B]  障害シミュレーション  開始", flush=True)
+    print("[障害シミュレーション]  開始", flush=True)
     print(f"{'='*60}", flush=True)
     result = fault_simulator.run(state)
     return result
 
 
 def fault_report_node(state: AgentState) -> dict:
-    """Phase B: 障害シミュレーション結果レポートを生成し final_report に追記する。"""
+    """障害シミュレーション結果レポートを生成し final_report に追記する。"""
     print("\n  >>> 障害シミュレーションレポートを生成しています...", flush=True)
     scenario_results: list[FaultScenarioResult] = state.get("fault_scenario_results", [])
 
     if not scenario_results:
         fault_report_md = (
-            "## Phase B: 障害シミュレーション\n\n"
+            "## 障害シミュレーション結果\n\n"
             "実行するシナリオがありませんでした（リンクなし、またはスキップ）。\n"
         )
     else:
@@ -164,7 +164,7 @@ def fault_report_node(state: AgentState) -> dict:
 
         verdict = "✅ 全シナリオで復旧を確認" if failed_count == 0 else f"⚠️ {failed_count} シナリオで復旧未確認"
         fault_report_md = (
-            f"## Phase B: 障害シミュレーション\n\n"
+            f"## 障害シミュレーション結果\n\n"
             f"- 実施シナリオ数: {len(scenario_results)} 件\n"
             f"- PASS（復旧確認）: {passed_count} 件\n"
             f"- FAIL（復旧未確認）: {failed_count} 件\n"
@@ -172,7 +172,7 @@ def fault_report_node(state: AgentState) -> dict:
             + "\n\n".join(scenario_sections)
         )
 
-    # Phase A の final_report に Phase B セクションを追記
+    # final_report に障害シミュレーション結果を追記
     phase_a_report = state.get("final_report", "")
     combined_report = (
         phase_a_report
@@ -266,7 +266,7 @@ def human_review_node(state: AgentState) -> dict[str, Any]:
 def _should_run_fault_sim(
     state: AgentState,
 ) -> Literal["fault_simulate", "done"]:
-    """Phase A 成功後に Phase B を実行するか判定する。"""
+    """構成検証成功後に障害シミュレーションを実行するか判定する。"""
     if state.get("fault_simulation_enabled", False):
         return "fault_simulate"
     return "done"
@@ -331,7 +331,7 @@ def build_graph(human_in_the_loop: bool = False) -> StateGraph:
         },
     )
 
-    # Phase B: report 後に障害シミュレーションを実行するか分岐
+    # report 後に障害シミュレーションを実行するか分岐
     graph.add_edge("fault_simulate", "fault_report")
 
     # 終端ノード（HITL あり: human_review、なし: END）
@@ -489,7 +489,7 @@ def main() -> None:
             "  --list               利用可能なプロンプトセット一覧を表示して終了する\n"
             "  --dry-run            CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
             "  --use-rag            修正設計時に過去の成功事例をプロンプトに追加する（要 chromadb）\n"
-            "  --fault-sim          Phase A 成功後に Phase B 障害シミュレーションを実行する\n"
+            "  --fault-sim          構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
             "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
             "  -h / --help          このヘルプを表示して終了する\n"
             "\n"

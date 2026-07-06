@@ -26,7 +26,8 @@ from agentic_ni.state import AgentState, FaultScenarioResult, TestResult
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 # リンク断後にルーティングプロトコルの収束を待つデフォルト秒数
-_DEFAULT_WAIT_SECONDS: int = 30
+# interface shutdown は終了待機不要なため loss条件アプローチ（死死時間=40s）より大幅に短い
+_DEFAULT_WAIT_SECONDS: int = 15
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +49,19 @@ class FaultScenario(BaseModel):
     )
     wait_seconds: int = Field(
         default=_DEFAULT_WAIT_SECONDS,
-        description="リンク状態変更後にルーティング収束を待つ秒数（デフォルト 30 秒）。",
+        description=(
+            "インターフェース shutdown/no shutdown 後にルーティング収束を待つ秒数。"
+            "interface shutdown は即時応答のため 15 秒程度で十分。"
+        ),
+    )
+    expected_ospf_neighbors: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "障害中に各デバイスで期待される OSPF ネイバー数。"
+            "デバイス名 → 期待ネイバー数のマッピング。"
+            "例: {'R1': 1, 'R2': 1} → R1・R2 はこのリンクが断されてネイバー数が 1 であることを確認する。"
+            "指定したデバイスに対してのみ完全一致チェックが行われ，未指定デバイスはネイバーが 1 以上であれば PASS。"
+        ),
     )
 
 
@@ -113,10 +126,41 @@ def _build_fault_plan_messages(
 # ---------------------------------------------------------------------------
 
 
+def _check_ospf_exact_count(
+    item: Any,
+    testbed_yaml: str,
+    expected_count: int,
+) -> TestResult:
+    """OSPF ネイバー数を期待値と完全一致で確認する。
+
+    _execute_test の ospf_neighbors チェック（> 0）と異なり、
+    障害中の「正確に N 本のネイバーを持つこと」を検証する。
+    """
+    from agentic_ni.tools import pyats_tools
+
+    try:
+        data = pyats_tools.check_ospf_neighbors(testbed_yaml, item.device)
+        actual = data["neighbors_up"]
+        ok = actual == expected_count
+        detail = f"{actual} neighbor(s) FULL (expected: {expected_count})"
+        return TestResult(
+            test=item.description,
+            result="PASS" if ok else "FAIL",
+            detail=detail,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return TestResult(
+            test=item.description,
+            result="FAIL",
+            detail=f"テスト実行エラー: {type(exc).__name__}: {exc}",
+        )
+
+
 def _run_test_items(
     test_items_dicts: list[dict],
     testbed_yaml: str,
     label: str,
+    expected_neighbor_counts: dict[str, int] | None = None,
 ) -> list[TestResult]:
     """test_plan_items（dict リスト）を TestItem に変換して実行する。
 
@@ -124,6 +168,8 @@ def _run_test_items(
         test_items_dicts: state["test_plan_items"] の各要素（dict）。
         testbed_yaml: pyATS テストベッド YAML 文字列。
         label: ログ表示用ラベル（例: "障害中", "復旧後"）。
+        expected_neighbor_counts: 障害中に期待される OSPF ネイバー数。
+            指定されたデバイスの ospf_neighbors チェックは完全一致になる。
 
     Returns:
         list[TestResult]: 各テスト項目の実行結果。
@@ -137,7 +183,17 @@ def _run_test_items(
             f"        ({i}/{len(test_items)}) [{label}] {item.description}",
             flush=True,
         )
-        result = _execute_test(item, testbed_yaml)
+        # ospf_neighbors かつ期待値指定ありの場合は完全一致チェック
+        if (
+            item.test_type == "ospf_neighbors"
+            and expected_neighbor_counts
+            and item.device in expected_neighbor_counts
+        ):
+            result = _check_ospf_exact_count(
+                item, testbed_yaml, expected_neighbor_counts[item.device]
+            )
+        else:
+            result = _execute_test(item, testbed_yaml)
         mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
         print(f"               → {mark}  {result['detail']}", flush=True)
         results.append(result)
@@ -227,14 +283,33 @@ def run(state: AgentState) -> dict[str, Any]:
             flush=True,
         )
 
-        # 4a. リンク断
+        # リンク情報（インターフェースラベル）を links から引引
+        link_info = next(
+            (lk for lk in links if lk["id"] == scenario.link_id), None
+        )
+        if link_info is None:
+            print(
+                f"    ⚠ リンクが見つかりません: {scenario.link_id}、シナリオをスキップします。",
+                flush=True,
+            )
+            continue
+
+        # 4a. インターフェース shutdown（両端）
         try:
-            cml_tools.set_link_state(lab_id, scenario.link_id, up=False)
-        except KeyError as exc:
-            print(f"    ⚠ リンクが見つかりません ({exc})、シナリオをスキップします。", flush=True)
+            pyats_tools.configure_interface_shutdown(
+                testbed_yaml, link_info["node_a"], link_info["interface_a"], shutdown=True
+            )
+            pyats_tools.configure_interface_shutdown(
+                testbed_yaml, link_info["node_b"], link_info["interface_b"], shutdown=True
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"    ⚠ インターフェース shutdown 失敗 ({exc})、シナリオをスキップします。",
+                flush=True,
+            )
             continue
         print(
-            f"    リンク DOWN: {scenario.link_label}"
+            f"    インターフェース shutdown: {scenario.link_label}"
             f" ({scenario.wait_seconds}s 待機中...)",
             flush=True,
         )
@@ -242,18 +317,31 @@ def run(state: AgentState) -> dict[str, Any]:
 
         # 4b. 障害中テスト
         print(f"    テスト実行（障害中）:", flush=True)
-        during_results = _run_test_items(test_plan_items, testbed_yaml, "障害中")
+        during_results = _run_test_items(
+            test_plan_items,
+            testbed_yaml,
+            "障害中",
+            expected_neighbor_counts=scenario.expected_ospf_neighbors or None,
+        )
 
-        # 4c. リンク復旧
-        cml_tools.set_link_state(lab_id, scenario.link_id, up=True)
+        # 4c. インターフェース no shutdown（復旧、両端）
+        try:
+            pyats_tools.configure_interface_shutdown(
+                testbed_yaml, link_info["node_a"], link_info["interface_a"], shutdown=False
+            )
+            pyats_tools.configure_interface_shutdown(
+                testbed_yaml, link_info["node_b"], link_info["interface_b"], shutdown=False
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"    ⚠ インターフェース復旧失敗 ({exc})", flush=True)
         print(
-            f"    リンク UP（復旧）: {scenario.link_label}"
+            f"    インターフェース no shutdown（復旧）: {scenario.link_label}"
             f" ({scenario.wait_seconds}s 待機中...)",
             flush=True,
         )
         time.sleep(scenario.wait_seconds)
 
-        # 4d. 復旧後テスト
+        # 4d. 復旧後テスト（Phase A テスト計画をそのまま再使用）
         print(f"    テスト実行（復旧後）:", flush=True)
         recovery_results = _run_test_items(test_plan_items, testbed_yaml, "復旧後")
 

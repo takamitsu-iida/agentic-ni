@@ -25,11 +25,15 @@ def _make_mock_link(
     link_id: str = "link-01",
     node_a_label: str = "R1",
     node_b_label: str = "R2",
+    interface_a_label: str = "GigabitEthernet0/0",
+    interface_b_label: str = "GigabitEthernet0/0",
 ) -> MagicMock:
     link = MagicMock()
     link.id = link_id
     link.node_a = MagicMock(label=node_a_label)
     link.node_b = MagicMock(label=node_b_label)
+    link.interface_a = MagicMock(label=interface_a_label)
+    link.interface_b = MagicMock(label=interface_b_label)
     return link
 
 
@@ -339,4 +343,10 @@ class TestGetLabInfo:
             result = get_lab_links("lab-abc")
 
         assert len(result) == 1
-        assert result[0] == {"id": "link-01", "node_a": "R1", "node_b": "R2"}
+        assert result[0] == {
+            "id": "link-01",
+            "node_a": "R1",
+            "node_b": "R2",
+            "interface_a": "GigabitEthernet0/0",
+            "interface_b": "GigabitEthernet0/0",
+        }

@@ -22,8 +22,8 @@ from agentic_ni.state import AgentState, FaultScenarioResult, TestResult
 _SAMPLE_TOPOLOGY = "lab:\n  title: test\n"
 _SAMPLE_CONFIGS = {"R1": "hostname R1\n", "R2": "hostname R2\n"}
 _SAMPLE_LINKS = [
-    {"id": "link-01", "node_a": "R1", "node_b": "R2"},
-    {"id": "link-02", "node_a": "R2", "node_b": "R3"},
+    {"id": "link-01", "node_a": "R1", "node_b": "R2", "interface_a": "GigabitEthernet0/0", "interface_b": "GigabitEthernet0/0"},
+    {"id": "link-02", "node_a": "R2", "node_b": "R3", "interface_a": "GigabitEthernet0/1", "interface_b": "GigabitEthernet0/0"},
 ]
 _SAMPLE_TESTBED = "testbed:\n  name: lab\n"
 _SAMPLE_TEST_PLAN_ITEMS = [
@@ -109,7 +109,7 @@ class TestSchemas:
             scenario_name="リンク断テスト",
         )
         assert s.link_id == "link-01"
-        assert s.wait_seconds == 30  # デフォルト値
+        assert s.wait_seconds == 15  # デフォルト値
 
     def test_fault_scenario_custom_wait(self):
         s = FaultScenario(
@@ -217,8 +217,8 @@ class TestRun:
                 return_value=_SAMPLE_TESTBED,
             ),
             patch(
-                "agentic_ni.tools.cml_tools.set_link_state",
-            ) as mock_set_link,
+                "agentic_ni.tools.pyats_tools.configure_interface_shutdown",
+            ),
             patch(
                 "agentic_ni.agents.fault_simulator._run_test_items",
                 return_value=pass_results,
@@ -254,7 +254,7 @@ class TestRun:
                 "agentic_ni.tools.pyats_tools.build_testbed",
                 return_value=_SAMPLE_TESTBED,
             ),
-            patch("agentic_ni.tools.cml_tools.set_link_state"),
+            patch("agentic_ni.tools.pyats_tools.configure_interface_shutdown"),
             patch(
                 "agentic_ni.agents.fault_simulator._run_test_items",
                 side_effect=[fail_results, fail_results],
@@ -265,8 +265,8 @@ class TestRun:
 
         assert result["fault_scenario_results"][0]["passed"] is False
 
-    def test_link_state_called_down_then_up(self):
-        """リンク断 → 復旧の順に set_link_state が呼ばれること。"""
+    def test_interface_shutdown_called_for_both_sides(self):
+        """両端のインターフェースが shutdown → no shutdown の順に呼ばれること。"""
         state = _base_state()
         plan = _make_fault_plan()
         pass_results = [_pass_result()]
@@ -284,7 +284,7 @@ class TestRun:
                 "agentic_ni.tools.pyats_tools.build_testbed",
                 return_value=_SAMPLE_TESTBED,
             ),
-            patch("agentic_ni.tools.cml_tools.set_link_state") as mock_set,
+            patch("agentic_ni.tools.pyats_tools.configure_interface_shutdown") as mock_shutdown,
             patch(
                 "agentic_ni.agents.fault_simulator._run_test_items",
                 return_value=pass_results,
@@ -293,10 +293,13 @@ class TestRun:
         ):
             run(state)
 
-        assert mock_set.call_count == 2
-        calls = mock_set.call_args_list
-        assert calls[0] == call("lab-abc", "link-01", up=False)
-        assert calls[1] == call("lab-abc", "link-01", up=True)
+        # shutdown局面: node_a・node_bの 2 回、復旧局面: node_a・node_bの 2 回 = 計 4 回
+        assert mock_shutdown.call_count == 4
+        calls = mock_shutdown.call_args_list
+        assert calls[0] == call(_SAMPLE_TESTBED, "R1", "GigabitEthernet0/0", shutdown=True)
+        assert calls[1] == call(_SAMPLE_TESTBED, "R2", "GigabitEthernet0/0", shutdown=True)
+        assert calls[2] == call(_SAMPLE_TESTBED, "R1", "GigabitEthernet0/0", shutdown=False)
+        assert calls[3] == call(_SAMPLE_TESTBED, "R2", "GigabitEthernet0/0", shutdown=False)
 
     def test_multiple_scenarios(self):
         """複数シナリオを正常に処理できること。"""
@@ -333,7 +336,7 @@ class TestRun:
                 "agentic_ni.tools.pyats_tools.build_testbed",
                 return_value=_SAMPLE_TESTBED,
             ),
-            patch("agentic_ni.tools.cml_tools.set_link_state"),
+            patch("agentic_ni.tools.pyats_tools.configure_interface_shutdown"),
             patch(
                 "agentic_ni.agents.fault_simulator._run_test_items",
                 return_value=pass_results,
@@ -345,7 +348,7 @@ class TestRun:
         assert len(result["fault_scenario_results"]) == 2
 
     def test_skip_scenario_when_link_not_found(self):
-        """存在しない link_id のシナリオは KeyError をキャッチしてスキップする。"""
+        """link_id が links に存在しない場合はスキップされる。"""
         state = _base_state()
         plan = _make_fault_plan(
             [
@@ -365,22 +368,20 @@ class TestRun:
             ),
             patch(
                 "agentic_ni.tools.cml_tools.get_lab_links",
-                return_value=_SAMPLE_LINKS,
+                return_value=_SAMPLE_LINKS,  # nonexistent-link は含まれない
             ),
             patch(
                 "agentic_ni.tools.pyats_tools.build_testbed",
                 return_value=_SAMPLE_TESTBED,
             ),
-            patch(
-                "agentic_ni.tools.cml_tools.set_link_state",
-                side_effect=KeyError("nonexistent-link"),
-            ),
+            patch("agentic_ni.tools.pyats_tools.configure_interface_shutdown") as mock_shutdown,
             patch("time.sleep"),
         ):
             result = run(state)
 
-        # KeyError でスキップされるため空リスト
+        # link_info が None のためスキップされ shutdown 未呼び出し
         assert result["fault_scenario_results"] == []
+        mock_shutdown.assert_not_called()
 
     def test_get_links_failure_returns_empty(self):
         """get_lab_links が例外を投げた場合は空リストを返す。"""
@@ -410,7 +411,7 @@ class TestGraphNodes:
 
         assert "fault_report" in result
         assert "final_report" in result
-        assert "Phase B" in result["fault_report"]
+        assert "障害シミュレーション結果" in result["fault_report"]
         assert "# Phase A\n" in result["final_report"]
 
     def test_fault_report_node_with_passed_scenarios(self):
@@ -455,6 +456,56 @@ class TestGraphNodes:
         assert "FAIL（復旧未確認）: 1 件" in result["fault_report"]
         assert "シナリオで復旧未確認" in result["fault_report"]
 
+    def test_fault_report_no_phase_b_string(self):
+        """fault_report に 'Phase B' の文字列が含まれないこと。"""
+        from agentic_ni.graph import fault_report_node
+
+        state = _base_state(fault_scenario_results=[], final_report="")
+        result = fault_report_node(state)
+        assert "Phase B" not in result["fault_report"]
+        assert "Phase B" not in result["final_report"]
+
+    def test_ospf_exact_count_check_pass(self):
+        """expected_ospf_neighbors が一致する場合は PASS。"""
+        from agentic_ni.agents.fault_simulator import _check_ospf_exact_count, _run_test_items
+        from agentic_ni.agents.validator import TestItem
+
+        item = TestItem(
+            test_type="ospf_neighbors",
+            device="R1",
+            target=None,
+            description="R1 OSPFネイバー確認",
+        )
+        with patch(
+            "agentic_ni.tools.pyats_tools.check_ospf_neighbors",
+            return_value={"neighbors_up": 1, "neighbors": []},
+        ):
+            result = _check_ospf_exact_count(item, _SAMPLE_TESTBED, expected_count=1)
+
+        assert result["result"] == "PASS"
+        assert "expected: 1" in result["detail"]
+
+    def test_ospf_exact_count_check_fail_when_mismatch(self):
+        """expected_ospf_neighbors が一致しない場合は FAIL。"""
+        from agentic_ni.agents.fault_simulator import _check_ospf_exact_count
+        from agentic_ni.agents.validator import TestItem
+
+        item = TestItem(
+            test_type="ospf_neighbors",
+            device="R1",
+            target=None,
+            description="R1 OSPFネイバー確認",
+        )
+        with patch(
+            "agentic_ni.tools.pyats_tools.check_ospf_neighbors",
+            return_value={"neighbors_up": 2, "neighbors": []},
+        ):
+            # 障害中に 2 ネイバーだが期待値 1 → FAIL
+            result = _check_ospf_exact_count(item, _SAMPLE_TESTBED, expected_count=1)
+
+        assert result["result"] == "FAIL"
+        assert "expected: 1" in result["detail"]
+
     def test_fault_report_appends_to_final_report(self):
         """fault_report の内容が final_report に追記されること。"""
         from agentic_ni.graph import fault_report_node
@@ -463,7 +514,7 @@ class TestGraphNodes:
         result = fault_report_node(state)
 
         assert result["final_report"].startswith("# Phase A\n")
-        assert "Phase B" in result["final_report"]
+        assert "障害シミュレーション" in result["final_report"]
 
     def test_should_run_fault_sim_enabled(self):
         """fault_simulation_enabled=True のとき 'fault_simulate' を返すこと。"""

@@ -537,3 +537,37 @@ def check_bgp_path(testbed_yaml: str, device_name: str, prefix: str) -> dict:
         "local_pref": local_pref,
         "raw": raw,
     }
+
+
+def configure_interface_shutdown(
+    testbed_yaml: str,
+    device_name: str,
+    interface: str,
+    shutdown: bool,
+) -> None:
+    """IOS 機器のインターフェースを shutdown / no shutdown する。
+
+    インターフェースを管理的に down させることで「ケーブル抜き」相当の障害を
+    模擬する。CML の損失条件（loss=100%）と異なり、line protocol が down になるため
+    OSPF が即時に neighbor を削除しルーティングを再収束させる。
+
+    Args:
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+        device_name: 対象デバイス名（ノードラベルと一致）。
+        interface: インターフェース名（例: "GigabitEthernet0/0"）。
+        shutdown: True でシャットダウン、False で no shutdown（復旧）。
+
+    Raises:
+        KeyError: デバイス名がテストベッドに存在しない場合。
+        ImportError: pyATS/Genie が未インストールの場合。
+    """
+    testbed = _load_testbed(testbed_yaml)
+    dev = _connect_device(testbed, device_name)
+    try:
+        state_cmd = "shutdown" if shutdown else "no shutdown"
+        dev.configure(f"interface {interface}\n {state_cmd}")
+    finally:
+        try:
+            dev.disconnect()
+        except Exception:  # noqa: BLE001
+            pass

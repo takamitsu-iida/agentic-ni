@@ -433,7 +433,8 @@ def get_lab_links(lab_id: str) -> list[dict]:
         lab_id: 対象ラボのID。
 
     Returns:
-        list[dict]: リンク情報のリスト。各要素は {"id", "node_a", "node_b"} を持つ。
+        list[dict]: リンク情報のリスト。各要素は
+            {"id", "node_a", "node_b", "interface_a", "interface_b"} を持つ。
     """
     client = _get_client()
     lab = _get_lab(client, lab_id)
@@ -442,6 +443,8 @@ def get_lab_links(lab_id: str) -> list[dict]:
             "id": link.id,
             "node_a": link.node_a.label,
             "node_b": link.node_b.label,
+            "interface_a": link.interface_a.label,
+            "interface_b": link.interface_b.label,
         }
         for link in lab.links()
     ]
