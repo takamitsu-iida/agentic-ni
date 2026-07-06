@@ -217,7 +217,7 @@ class TestRun:
                 return_value=_SAMPLE_TESTBED,
             ),
             patch(
-                "agentic_ni.tools.pyats_tools.configure_interface_shutdown",
+                "agentic_ni.tools.cml_tools.set_link_state",
             ),
             patch(
                 "agentic_ni.agents.fault_simulator._run_test_items",
@@ -254,7 +254,7 @@ class TestRun:
                 "agentic_ni.tools.pyats_tools.build_testbed",
                 return_value=_SAMPLE_TESTBED,
             ),
-            patch("agentic_ni.tools.pyats_tools.configure_interface_shutdown"),
+            patch("agentic_ni.tools.cml_tools.set_link_state"),
             patch(
                 "agentic_ni.agents.fault_simulator._run_test_items",
                 side_effect=[fail_results, fail_results],
@@ -265,8 +265,8 @@ class TestRun:
 
         assert result["fault_scenario_results"][0]["passed"] is False
 
-    def test_interface_shutdown_called_for_both_sides(self):
-        """両端のインターフェースが shutdown → no shutdown の順に呼ばれること。"""
+    def test_cml_link_state_called_down_then_up(self):
+        """CML リンクが DOWN → UP の順に set_link_state が呼ばれること。"""
         state = _base_state()
         plan = _make_fault_plan()
         pass_results = [_pass_result()]
@@ -284,7 +284,7 @@ class TestRun:
                 "agentic_ni.tools.pyats_tools.build_testbed",
                 return_value=_SAMPLE_TESTBED,
             ),
-            patch("agentic_ni.tools.pyats_tools.configure_interface_shutdown") as mock_shutdown,
+            patch("agentic_ni.tools.cml_tools.set_link_state") as mock_set,
             patch(
                 "agentic_ni.agents.fault_simulator._run_test_items",
                 return_value=pass_results,
@@ -293,13 +293,10 @@ class TestRun:
         ):
             run(state)
 
-        # shutdown局面: node_a・node_bの 2 回、復旧局面: node_a・node_bの 2 回 = 計 4 回
-        assert mock_shutdown.call_count == 4
-        calls = mock_shutdown.call_args_list
-        assert calls[0] == call(_SAMPLE_TESTBED, "R1", "GigabitEthernet0/0", shutdown=True)
-        assert calls[1] == call(_SAMPLE_TESTBED, "R2", "GigabitEthernet0/0", shutdown=True)
-        assert calls[2] == call(_SAMPLE_TESTBED, "R1", "GigabitEthernet0/0", shutdown=False)
-        assert calls[3] == call(_SAMPLE_TESTBED, "R2", "GigabitEthernet0/0", shutdown=False)
+        assert mock_set.call_count == 2
+        calls = mock_set.call_args_list
+        assert calls[0] == call("lab-abc", "link-01", up=False)
+        assert calls[1] == call("lab-abc", "link-01", up=True)
 
     def test_multiple_scenarios(self):
         """複数シナリオを正常に処理できること。"""
@@ -336,7 +333,9 @@ class TestRun:
                 "agentic_ni.tools.pyats_tools.build_testbed",
                 return_value=_SAMPLE_TESTBED,
             ),
-            patch("agentic_ni.tools.pyats_tools.configure_interface_shutdown"),
+            patch(
+                "agentic_ni.tools.cml_tools.set_link_state",
+            ),
             patch(
                 "agentic_ni.agents.fault_simulator._run_test_items",
                 return_value=pass_results,
@@ -374,14 +373,17 @@ class TestRun:
                 "agentic_ni.tools.pyats_tools.build_testbed",
                 return_value=_SAMPLE_TESTBED,
             ),
-            patch("agentic_ni.tools.pyats_tools.configure_interface_shutdown") as mock_shutdown,
+            patch(
+                "agentic_ni.tools.cml_tools.set_link_state",
+                side_effect=KeyError("nonexistent-link"),
+            ) as mock_set,
             patch("time.sleep"),
         ):
             result = run(state)
 
-        # link_info が None のためスキップされ shutdown 未呼び出し
+        # KeyError でスキップされるため空リスト、set_link_state は 1 回呼ばれた後スキップ
         assert result["fault_scenario_results"] == []
-        mock_shutdown.assert_not_called()
+        mock_set.assert_called_once_with("lab-abc", "nonexistent-link", up=False)
 
     def test_get_links_failure_returns_empty(self):
         """get_lab_links が例外を投げた場合は空リストを返す。"""

@@ -234,7 +234,7 @@ class TestPushConfig:
 
 
 class TestSetLinkState:
-    def test_link_down_sets_100_loss(self, monkeypatch):
+    def test_link_down_calls_stop(self, monkeypatch):
         link = _make_mock_link("link-01")
         mock_lab = _make_mock_lab(links=[link])
         mock_client = _make_mock_client(mock_lab)
@@ -244,10 +244,10 @@ class TestSetLinkState:
 
             set_link_state("lab-abc", "link-01", up=False)
 
-        link.set_condition.assert_called_once_with(loss=100.0)
-        link.remove_condition.assert_not_called()
+        link.stop.assert_called_once()
+        link.start.assert_not_called()
 
-    def test_link_up_removes_condition(self, monkeypatch):
+    def test_link_up_calls_start(self, monkeypatch):
         link = _make_mock_link("link-01")
         mock_lab = _make_mock_lab(links=[link])
         mock_client = _make_mock_client(mock_lab)
@@ -257,8 +257,8 @@ class TestSetLinkState:
 
             set_link_state("lab-abc", "link-01", up=True)
 
-        link.remove_condition.assert_called_once()
-        link.set_condition.assert_not_called()
+        link.start.assert_called_once()
+        link.stop.assert_not_called()
 
     def test_raises_when_link_not_found(self, monkeypatch):
         mock_lab = _make_mock_lab(links=[_make_mock_link("link-01")])

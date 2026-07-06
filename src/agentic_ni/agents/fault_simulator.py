@@ -138,19 +138,22 @@ def _check_ospf_exact_count(
     """
     from agentic_ni.tools import pyats_tools
 
+    # テスト名に期待ネイバー数を明示（元の説明文の「」内容に依存しない）
+    test_name = f"OSPF ネイバー数確認: {item.device} （障害中の期待値: {expected_count}）"
+
     try:
         data = pyats_tools.check_ospf_neighbors(testbed_yaml, item.device)
         actual = data["neighbors_up"]
         ok = actual == expected_count
         detail = f"{actual} neighbor(s) FULL (expected: {expected_count})"
         return TestResult(
-            test=item.description,
+            test=test_name,
             result="PASS" if ok else "FAIL",
             detail=detail,
         )
     except Exception as exc:  # noqa: BLE001
         return TestResult(
-            test=item.description,
+            test=test_name,
             result="FAIL",
             detail=f"テスト実行エラー: {type(exc).__name__}: {exc}",
         )
@@ -283,33 +286,17 @@ def run(state: AgentState) -> dict[str, Any]:
             flush=True,
         )
 
-        # リンク情報（インターフェースラベル）を links から引引
-        link_info = next(
-            (lk for lk in links if lk["id"] == scenario.link_id), None
-        )
-        if link_info is None:
-            print(
-                f"    ⚠ リンクが見つかりません: {scenario.link_id}、シナリオをスキップします。",
-                flush=True,
-            )
-            continue
-
-        # 4a. インターフェース shutdown（両端）
+        # 4a. CML リンク停止（両端同時に line protocol down）
         try:
-            pyats_tools.configure_interface_shutdown(
-                testbed_yaml, link_info["node_a"], link_info["interface_a"], shutdown=True
-            )
-            pyats_tools.configure_interface_shutdown(
-                testbed_yaml, link_info["node_b"], link_info["interface_b"], shutdown=True
-            )
-        except Exception as exc:  # noqa: BLE001
+            cml_tools.set_link_state(lab_id, scenario.link_id, up=False)
+        except KeyError as exc:
             print(
-                f"    ⚠ インターフェース shutdown 失敗 ({exc})、シナリオをスキップします。",
+                f"    ⚠ リンクが見つかりません ({exc})、シナリオをスキップします。",
                 flush=True,
             )
             continue
         print(
-            f"    インターフェース shutdown: {scenario.link_label}"
+            f"    CML リンク DOWN: {scenario.link_label}"
             f" ({scenario.wait_seconds}s 待機中...)",
             flush=True,
         )
@@ -324,24 +311,19 @@ def run(state: AgentState) -> dict[str, Any]:
             expected_neighbor_counts=scenario.expected_ospf_neighbors or None,
         )
 
-        # 4c. インターフェース no shutdown（復旧、両端）
+        # 4c. CML リンク復旧（両端同時に line protocol up）
         try:
-            pyats_tools.configure_interface_shutdown(
-                testbed_yaml, link_info["node_a"], link_info["interface_a"], shutdown=False
-            )
-            pyats_tools.configure_interface_shutdown(
-                testbed_yaml, link_info["node_b"], link_info["interface_b"], shutdown=False
-            )
+            cml_tools.set_link_state(lab_id, scenario.link_id, up=True)
         except Exception as exc:  # noqa: BLE001
-            print(f"    ⚠ インターフェース復旧失敗 ({exc})", flush=True)
+            print(f"    ⚠ リンク復旧失敗 ({exc})", flush=True)
         print(
-            f"    インターフェース no shutdown（復旧）: {scenario.link_label}"
+            f"    CML リンク UP（復旧）: {scenario.link_label}"
             f" ({scenario.wait_seconds}s 待機中...)",
             flush=True,
         )
         time.sleep(scenario.wait_seconds)
 
-        # 4d. 復旧後テスト（Phase A テスト計画をそのまま再使用）
+        # 4d. 復旧後テスト
         print(f"    テスト実行（復旧後）:", flush=True)
         recovery_results = _run_test_items(test_plan_items, testbed_yaml, "復旧後")
 

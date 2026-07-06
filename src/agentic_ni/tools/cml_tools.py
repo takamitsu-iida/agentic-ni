@@ -354,15 +354,19 @@ def push_config(lab_id: str, node_name: str, config: str) -> None:
 
 
 def set_link_state(lab_id: str, link_id: str, up: bool) -> None:
-    """リンクのUP/DOWN状態を制御する（障害シミュレーション）。
+    """CML レベルでリンクを DOWN/UP する（障害シミュレーション）。
 
-    * up=False: 100% パケットロス条件を付与してリンク断を模擬する。
-    * up=True : 条件を削除して正常状態に戻す。
+    link.stop() / link.start() を使い CML インフラレイヤーでリンクを制御する。
+    ルーター 2 台のインターフェースが同時に line protocol down になるため、
+    片側 shutdown より客観的な障害シミュレーションが可能。
+
+    * up=False: link.stop() でリンクを停止する。
+    * up=True : link.start() でリンクを再開する。
 
     Args:
         lab_id: 対象ラボのID。
         link_id: 対象リンクのID。
-        up: True でリンクUP、False でリンクDOWN（100% loss）。
+        up: True でリンクUP（start）、False でリンクDOWN（stop）。
 
     Raises:
         KeyError: lab_id またはリンクIDが存在しない場合。
@@ -374,10 +378,9 @@ def set_link_state(lab_id: str, link_id: str, up: bool) -> None:
         raise KeyError(f"リンクが見つかりません: link_id={link_id!r}, lab_id={lab_id!r}")
 
     if up:
-        link.remove_condition()
+        link.start()
     else:
-        # 100% パケットロスでリンク断を模擬
-        link.set_condition(loss=100.0)
+        link.stop()
 
 
 def wait_for_nodes_ready(lab_id: str, timeout: int = 300) -> bool:
