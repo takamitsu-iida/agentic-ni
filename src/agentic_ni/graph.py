@@ -441,6 +441,7 @@ def troubleshoot_verify_node(state: AgentState) -> dict:
     """Phase H: 修正後にテストを実行して検証する（デプロイなし）。"""
     print("\n[トラブルシューティング] 検証テストを実行中...", flush=True)
     from agentic_ni.agents.validator import TestPlan, _build_test_plan_messages, _execute_test
+    from agentic_ni.llm import get_llm
     from agentic_ni.tools import pyats_tools
 
     llm = get_llm()
