@@ -1428,3 +1428,297 @@ agentic-ni --troubleshoot <lab_id>
 - `graph.py` に `compile_graph_troubleshoot()` を追加
 - 診断モード専用のプロンプトセット（`troubleshoot/architect.md`）を作成
 - 修正提案にとどまり自動変更はしません（安全のため）。
+
+
+
+<br><br><br><br><br>
+
+`agentic-ni static` の実行例。
+
+初回実行時はエンド・エンドの疎通に失敗しているが、原因を分析して、ホストにデフォルトルートがないことを突き止めている。
+２回目の施行ではホストにデフォルトルートが設定されているため、エンド・エンドの疎通に成功し、要件を満たしたネットワークを完成させている。
+
+```
+(agentic-ni) iida@s400win:~/git/agentic-ni$ agentic-ni static
+プロンプトセット: static
+
+【要件】
+  ## ネットワーク要件
+  - R1（ルータ1）とR2（ルータ2）を直接接続する
+  - 疎通確認用の端末としてR1の背後にホストを1台配置する
+  - 疎通確認用の端末としてR2の背後にホストを1台配置する
+
+  ## 機器要件
+  - R1とR2のノード定義はiosvを使用する
+  - 疎通確認用のホストのノード定義はiol-xeを使用する
+  - 疎通確認用のホストのインタフェースはEthernet0/0を使用する
+
+  ## ネットワークアドレス
+  - 共通の接続セグメントは 192.168.12.0/24 とする
+  - R1の背後に 192.168.10.0/24 を配置する
+  - R2の背後に 192.168.20.0/24 を配置する
+
+  ## ルーティング要件
+  - 両拠点間の通信は、スタティックルーティング（静的ルート）を用いて開通させること
+
+処理を開始します...
+
+
+============================================================
+[第1回 / 上限5回]  設計エージェント  (初回設計)
+============================================================
+  >>> LLM にトポロジーとコンフィグを生成させています...
+  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。
+  <<< 設計完了
+
+[第1回 / 上限5回]  検証エージェント  開始
+  [1/4] CML にデプロイ中...
+    ラボをインポート中...
+    コンフィグを投入中 (4 ノード)...
+    ラボを起動中...
+    ノードの起動を待機中...
+    起動完了 (lab_id=21860d61-0556-48e3-a7be-3cf751e83905)
+  [1/4] デプロイ完了 (lab_id=21860d61-0556-48e3-a7be-3cf751e83905)
+  [2/4] テスト計画を立案中...
+  [2/4] テスト計画完了 (7 件)
+  [3/4] テストを実行中...
+        (1/7) R1のGigabitEthernet0/0インターフェースの状態を確認
+               → ✅ PASS  GigabitEthernet0/0: line=up, protocol=up
+        (2/7) R1のGigabitEthernet0/1インターフェースの状態を確認
+               → ✅ PASS  GigabitEthernet0/1: line=up, protocol=up
+        (3/7) R2のGigabitEthernet0/1インターフェースの状態を確認
+               → ✅ PASS  GigabitEthernet0/1: line=up, protocol=up
+        (4/7) Host1からHost2（192.168.20.2）へのpingを確認
+               → ❌ FAIL  ping 192.168.20.2 FAILED
+        (5/7) R1から共通セグメント接続のR2（192.168.12.2）へのpingを確認
+               → ✅ PASS  ping 192.168.12.2 OK
+        (6/7) Host1からR1の最寄りゲートウェイ（192.168.10.1）へのpingを確認
+               → ✅ PASS  ping 192.168.10.1 OK
+        (7/7) Host2からR2の最寄りゲートウェイ（192.168.20.1）へのpingを確認
+               → ✅ PASS  ping 192.168.20.1 OK
+  [4/4] 失敗原因を AI が分析中... (1 件失敗)
+  [4/4] 分析完了
+
+  『根本原因』 Host1からHost2へのpingが通らない原因は、Host1およびHost2でデフォルトゲートウェイが設定されていないことです。デフォルトゲートウェイが設定されておらず、両ホストのルーティングが完了していないためです。
+  『修正依頼』 Host1でデフォルトゲートウェイを192.168.10.1に、Host2でデフォルトゲートウェイを192.168.20.1に設定してください。
+
+
+============================================================
+[第2回 / 上限5回]  設計エージェント  (修正設計)
+============================================================
+  >>> LLM にトポロジーとコンフィグを生成させています...
+  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。
+  【設計方針】 Host1とHost2にデフォルトゲートウェイを設定し、双方向の通信を可能にしました。
+  <<< 設計完了
+
+[第2回 / 上限5回]  検証エージェント  開始
+  [1/4] CML にデプロイ中...
+    既存ラボを停止・wipe中...
+    コンフィグを更新中 (4 ノード)...
+    ラボを再起動中...
+    ノードの起動を待機中...
+    起動完了 (lab_id=21860d61-0556-48e3-a7be-3cf751e83905)
+  [1/4] デプロイ完了 (lab_id=21860d61-0556-48e3-a7be-3cf751e83905)
+  [2/4] テスト計画を立案中...
+  [2/4] テスト計画完了 (4 件)
+  [3/4] テストを実行中...
+        (1/4) Verify that R1's GigabitEthernet0/0 interface is up/up.
+               → ✅ PASS  GigabitEthernet0/0: line=up, protocol=up
+        (2/4) Verify that R1's GigabitEthernet0/1 interface is up/up.
+               → ✅ PASS  GigabitEthernet0/1: line=up, protocol=up
+        (3/4) Verify that R2's GigabitEthernet0/0 interface is up/up.
+               → ✅ PASS  GigabitEthernet0/0: line=up, protocol=up
+        (4/4) Check connectivity between Host1 (behind R1) and Host2 (behind R2) to ensure static routing is implemented correctly.
+               → ✅ PASS  ping 192.168.20.2 OK
+  [4/4] 全テスト PASS
+
+  >>> 全テスト PASS! 最終レポートを生成しています...
+# 検証成功レポート
+
+**生成日時**: 2026-07-06 21:20:30
+
+## 要件
+## ネットワーク要件
+- R1（ルータ1）とR2（ルータ2）を直接接続する
+- 疎通確認用の端末としてR1の背後にホストを1台配置する
+- 疎通確認用の端末としてR2の背後にホストを1台配置する
+
+## 機器要件
+- R1とR2のノード定義はiosvを使用する
+- 疎通確認用のホストのノード定義はiol-xeを使用する
+- 疎通確認用のホストのインタフェースはEthernet0/0を使用する
+
+## ネットワークアドレス
+- 共通の接続セグメントは 192.168.12.0/24 とする
+- R1の背後に 192.168.10.0/24 を配置する
+- R2の背後に 192.168.20.0/24 を配置する
+
+## ルーティング要件
+- 両拠点間の通信は、スタティックルーティング（静的ルート）を用いて開通させること
+
+## 概要
+- 試行回数: 2 回
+- PASSテスト: 4 件
+- FAILテスト: 0 件
+- ラボID: 21860d61-0556-48e3-a7be-3cf751e83905
+
+## ネットワーク設計
+
+### トポロジー定義（CML YAML）
+```yaml
+lab:
+  title: agentic-ni-static
+  description: "Direct connection between R1 and R2 with hosts behind each router for connectivity check."
+  notes: ""
+  timestamp: 0
+  version: "0.1.0"
+
+nodes:
+  - id: "n0"
+    label: "R1"
+    node_definition: "iosv"
+    x: -200
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+  - id: "n1"
+    label: "R2"
+    node_definition: "iosv"
+    x: 200
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+  - id: "n2"
+    label: "Host1"
+    node_definition: "iol-xe"
+    x: -300
+    y: 100
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "Ethernet0/0"
+        slot: 0
+        type: physical
+  - id: "n3"
+    label: "Host2"
+    node_definition: "iol-xe"
+    x: 300
+    y: 100
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "Ethernet0/0"
+        slot: 0
+        type: physical
+
+links:
+  - id: "l0"
+    n1: "n0"
+    i1: "i0"
+    n2: "n1"
+    i2: "i0"
+    label: "l0"
+  - id: "l1"
+    n1: "n0"
+    i1: "i1"
+    n2: "n2"
+    i2: "i0"
+    label: "l1"
+  - id: "l2"
+    n1: "n1"
+    i1: "i1"
+    n2: "n3"
+    i2: "i0"
+    label: "l2"
+```
+
+### 機器コンフィグ
+
+### R1
+```
+hostname R1
+!
+interface GigabitEthernet0/0
+ ip address 192.168.12.1 255.255.255.0
+ no shutdown
+!
+interface GigabitEthernet0/1
+ ip address 192.168.10.1 255.255.255.0
+ no shutdown
+!
+ip route 192.168.20.0 255.255.255.0 192.168.12.2
+!
+end
+```
+
+### R2
+```
+hostname R2
+!
+interface GigabitEthernet0/0
+ ip address 192.168.12.2 255.255.255.0
+ no shutdown
+!
+interface GigabitEthernet0/1
+ ip address 192.168.20.1 255.255.255.0
+ no shutdown
+!
+ip route 192.168.10.0 255.255.255.0 192.168.12.1
+!
+end
+```
+
+### Host1
+```
+hostname Host1
+!
+interface Ethernet0/0
+ ip address 192.168.10.2 255.255.255.0
+ no shutdown
+!
+ip route 0.0.0.0 0.0.0.0 192.168.10.1
+!
+end
+```
+
+### Host2
+```
+hostname Host2
+!
+interface Ethernet0/0
+ ip address 192.168.20.2 255.255.255.0
+ no shutdown
+!
+ip route 0.0.0.0 0.0.0.0 192.168.20.1
+!
+end
+```
+
+## 検証テスト結果
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| Verify that R1's GigabitEthernet0/0 interface is up/up. | ✅ PASS | GigabitEthernet0/0: line=up, protocol=up |
+| Verify that R1's GigabitEthernet0/1 interface is up/up. | ✅ PASS | GigabitEthernet0/1: line=up, protocol=up |
+| Verify that R2's GigabitEthernet0/0 interface is up/up. | ✅ PASS | GigabitEthernet0/0: line=up, protocol=up |
+| Check connectivity between Host1 (behind R1) and Host2 (behind R2) to ensure static routing is implemented correctly. | ✅ PASS | ping 192.168.20.2 OK |
+
+すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。
+(agentic-ni) iida@s400win:~/git/agentic-ni$
+```
