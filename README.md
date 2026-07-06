@@ -774,6 +774,9 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
    pip install -r requirements-network.txt
    ```
 
+   > **rag（chromadb）も一緒に入れる場合**: `uv sync --extra all` で network + rag の両方を一度にインストールできます。
+   > `uv sync --extra network` と `uv sync --extra rag` を個別に実行すると後に実行した方のパッケージしか残らない場合があるため、両方使う場合は `--extra all` または両方同時指定を推奨します。
+
 2. インストールの確認。
 
    ```bash
@@ -860,7 +863,7 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
    pip install chromadb pysqlite3-binary
    ```
 
-   > **`pysqlite3-binary` について**: Ubuntu 20.04 など SQLite が古い環境では
+   > **network（pyATS）も一緒に入れる場合**: `uv sync --extra all` を使うと両方を一度にインストールできます。
    > ChromaDB 起動時に `RuntimeError: requires sqlite3 >= 3.35.0` が発生します。
    > `pysqlite3-binary` を一緒にインストールすることで解決されます。
 
@@ -1109,10 +1112,13 @@ agentic-ni --rag-stats
 
 **インストール**（初回のみ）:
 ```bash
-uv sync --extra rag
+uv sync --extra rag        # chromadb のみ
+uv sync --extra all        # pyATS/Genie + chromadb 両方
 # または
-pip install chromadb
+pip install chromadb pysqlite3-binary
 ```
+
+> **`uv sync --extra` の注意**: `--extra network` と `--extra rag` を**別丅に**実行すると、後から実行した方のパッケージしか残らない場合があります。両方入れる場合は `uv sync --extra all` または `uv sync --extra network --extra rag` と同時指定してください。
 
 > **初回実行時の注意**: chromadb はデフォルトで埋め込みモデル `all-MiniLM-L6-v2` を
 > HuggingFace から自動ダウンロードします（約90MB）。オフライン環境では事前にダウンロードが必要です。
