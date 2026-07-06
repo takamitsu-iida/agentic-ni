@@ -189,6 +189,10 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
         knowledge_context = _build_knowledge_context(state["requirement"])
         if knowledge_context:
             user_content += f"\n\n{knowledge_context}"
+            print(
+                f"  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。",
+                flush=True,
+            )
     else:
         # --- ゼロ設計モード ---
         user_content = (
@@ -202,6 +206,14 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
         knowledge_context = _build_knowledge_context(state["requirement"])
         if knowledge_context:
             user_content += f"\n\n{knowledge_context}"
+            print(
+                f"  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。",
+                flush=True,
+            )
+        else:
+            print("  [知識ベース] 未インデックス（スキップ）。agentic-ni --rag-index で索引化できます。",
+                flush=True,
+            )
 
     return [
         {"role": "system", "content": system_prompt},
