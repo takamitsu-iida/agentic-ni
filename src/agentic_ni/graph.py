@@ -94,23 +94,8 @@ def report_node(state: AgentState) -> dict:
 
 
 def _save_to_rag(state: AgentState) -> None:
-    """成功した実行のエラー履歴をRAGストアに保存する。use_rag=False の場合は何もしない。"""
-    if not state.get("use_rag", False):
-        return
-    error_history = state.get("error_history", [])
-    if not error_history:
-        return
-    try:
-        from agentic_ni.tools import rag_tools
-        saved = rag_tools.save_successful_run(
-            requirement=state.get("requirement", ""),
-            error_history=error_history,
-            topology_yaml=state.get("topology_yaml", ""),
-            device_configs=state.get("device_configs", {}),
-        )
-        print(f"  >>> RAGストアに {saved} 件の事例を保存しました。", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  >>> RAG保存スキップ: {exc}", flush=True)
+    """(deprecated: --use-rag 廃止により何もしない。)"""
+    return
 
 
 # ---------------------------------------------------------------------------
@@ -578,7 +563,6 @@ def initial_state_troubleshoot(
     return AgentState(
         requirement=requirement,
         prompt_set=prompt_set,
-        use_rag=False,
         fault_simulation_enabled=False,
         error_history=[],
         topology_yaml="",
@@ -626,7 +610,6 @@ def compile_graph_interactive():
 def initial_state(
     requirement: str,
     prompt_set: str = "demo",
-    use_rag: bool = False,
     fault_simulation_enabled: bool = False,
 ) -> AgentState:
     """初期ステートを生成するファクトリー関数。
@@ -634,13 +617,11 @@ def initial_state(
     Args:
         requirement: ネットワーク要件の自然言語テキスト。
         prompt_set: 使用するプロンプトセット名（prompts/ 配下のサブディレクトリ名）。
-        use_rag: True の場合、修正設計時に過去の類似成功事例をプロンプトに追加する。
-        fault_simulation_enabled: True の場合、Phase A 成功後に障害シミュレーションを実行する。
+        fault_simulation_enabled: True の場合、過去の成功後に障害シミュレーションを実行する。
     """
     return AgentState(
         requirement=requirement,
         prompt_set=prompt_set,
-        use_rag=use_rag,
         fault_simulation_enabled=fault_simulation_enabled,
         error_history=[],
         topology_yaml="",
@@ -692,7 +673,6 @@ def main() -> None:
             "オプション:\n"
             "  --list               利用可能なプロンプトセット一覧を表示して終了する\n"
             "  --dry-run            CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
-            "  --use-rag            修正設計時に過去の成功事例をプロンプトに追加する（要 chromadb）\n"
             "  --fault-sim          構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
             "  --troubleshoot [ID]  既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索）\n"
             "  --issue '<説明>'     --troubleshoot と併用する問題の説明（任意）\n"
@@ -759,11 +739,8 @@ def main() -> None:
         print("知識ベースのインデックスを全消去しました。")
         return
 
-    use_rag = "--use-rag" in args
     dry_run = "--dry-run" in args
     fault_simulation_enabled = "--fault-sim" in args
-
-    # --troubleshoot [ラボID] / --issue '説明' のパース
     # lab_id は省略可（省略時はラボタイトルで自動検索）
     troubleshoot_mode: bool = "--troubleshoot" in args
     troubleshoot_lab_id: str | None = None
@@ -802,8 +779,6 @@ def main() -> None:
     print(f"プロンプトセット: {prompt_set}")
     if dry_run:
         print("モード: ドライラン（CMLデプロイなし）")
-    if use_rag:
-        print(f"RAG: 有効")
     if fault_simulation_enabled:
         print("障害シミュレーション: 有効")
     if troubleshoot_mode:
@@ -848,7 +823,7 @@ def main() -> None:
         return
 
     app = compile_graph_dry_run() if dry_run else compile_graph()
-    result = app.invoke(initial_state(requirement, prompt_set, use_rag, fault_simulation_enabled))
+    result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled))
     print(result.get("final_report", "(レポートなし)"))
 
 

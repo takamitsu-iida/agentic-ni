@@ -185,11 +185,6 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
             f"```\n{state['error_log']}\n```\n\n"
             "修正点のみ変更し、問題のない箇所はそのまま維持してください。"
         )
-        # --- RAGコンテキスト付与（有効時のみ）---
-        if state.get("use_rag", False):
-            rag_context = _build_rag_context(state["error_log"])
-            if rag_context:
-                user_content += f"\n\n{rag_context}"
         # --- 知識ベースコンテキスト付与（インデックス済みなら自動）---
         knowledge_context = _build_knowledge_context(state["requirement"])
         if knowledge_context:
@@ -258,14 +253,6 @@ def run(state: AgentState) -> dict[str, Any]:
     result: DesignOutput = structured_llm.invoke(messages)
 
     if state.get("error_log"):
-        if state.get("use_rag", False):
-            try:
-                from agentic_ni.tools import rag_tools
-                cases = rag_tools.search_similar_errors(state["error_log"], k=3)
-                if cases:
-                    print(f"  【RAG】 類似事例 {len(cases)} 件をプロンプトに追加しました。", flush=True)
-            except Exception:  # noqa: BLE001
-                pass
         print(f"  【設計方針】 {result.design_rationale}", flush=True)
 
     topology_yaml = _set_lab_title(

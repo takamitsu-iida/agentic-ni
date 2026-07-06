@@ -533,6 +533,7 @@ Phase 4: 設計エージェント・グラフ単体テスト（LLMモック）
 Phase 5: CML 接続確認
 Phase 6: pyATS/Genie セットアップ確認
 Phase 7: E2E テスト（全機能統合）
+RAG  : 知識ベース RAG セットアップ確認（任意）
 ```
 
 <br>
@@ -843,7 +844,70 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 
 <br>
 
-### トラブルシューティング
+### RAG — 知識ベース RAG セットアップ確認（任意）
+
+**目的**: `rag/` ディレクトリのテキストファイルを ChromaDB に登録し、設計・トラブルシューティング時に LLM が自動で参照できることを確認します。
+
+**前提条件**: Phase 3（LLM 実疏通）が完了していること。
+
+**手順**:
+
+1. chromadb と pysqlite3-binary をインストールする。
+
+   ```bash
+   uv sync --extra rag
+   # または pip を使う場合
+   pip install chromadb pysqlite3-binary
+   ```
+
+   > **`pysqlite3-binary` について**: Ubuntu 20.04 など SQLite が古い環境では
+   > ChromaDB 起動時に `RuntimeError: requires sqlite3 >= 3.35.0` が発生します。
+   > `pysqlite3-binary` を一緒にインストールすることで解決されます。
+
+2. 知識ベースのユニットテストを実行する。
+
+   ```bash
+   pytest tests/test_rag_knowledge.py -v
+   ```
+
+3. `rag/` ディレクトリのファイルを索引化する。
+
+   ```bash
+   agentic-ni --rag-index
+   ```
+
+   期待される出力例:
+   ```
+   知識ベースを索引化中: rag
+       ospf_guide.md: 6 チャンク
+   完了: 合計 6 チャンクを知識ベースに登録しました。
+   ```
+
+4. 統計を確認する。
+
+   ```bash
+   agentic-ni --rag-stats
+   ```
+
+   期待される出力例:
+   ```
+   RAGストア統計:
+     実行ログ RAG (成功事例): 0 件
+     知識ベース RAG (テキストファイル): 6 チャンク
+     保存場所: /home/ユーザー名/.agentic_ni/rag_store
+   ```
+
+5. 知識ベースが設計プロンプトに反映されることを確認する。
+
+   ```bash
+   # --dry-run は実障害なしで設計プロンプトの内容を確認することができる
+   agentic-ni demo --dry-run
+   ```
+
+   知識ベースがインデックス済みの場合、設計プロンプト消費トークンが増加します。
+   `configs/demo/topology.yaml` と機器コンフィグが出力されなら正常です。
+
+**完了条件**: `test_rag_knowledge.py` の全テストが PASS し、`--rag-index` が 6 チャンクを登録できること。
 
 | 症状 | 確認箇所 |
 |---|---|
@@ -852,8 +916,10 @@ pytest tests/test_architect.py tests/test_validator.py tests/test_graph.py -v
 | LLM API 認証エラー | `.env` の API キーが正しいか確認 |
 | CML 接続タイムアウト | `CML_URL` のホスト名・ポートを確認、VPN 接続を確認 |
 | pyATS `ImportError` | `uv sync --extra network` または `pip install pyats genie` を実行 |
-| `chromadb` が見つからない | `uv sync --extra rag` または `pip install chromadb` を実行 |
+| `chromadb` が見つからない | `uv sync --extra rag` または `pip install chromadb pysqlite3-binary` を実行 |
+| `RuntimeError: requires sqlite3 >= 3.35.0` | `pip install pysqlite3-binary` を実行（Ubuntu 20.04 等の古い環境向け） |
 | RAG検索が0件 | `agentic-ni --rag-stats` で保存件数を確認。初回実行時は空のため正常 |
+| 知識ベースが空（0 チャンク）| `agentic-ni --rag-index` を実行して `rag/` ディレクトリを索引化する |
 | `pytest` が見つからない | `.venv/bin/pytest` を使うか `source .venv/bin/activate` を実行 |
 ---
 
@@ -883,7 +949,6 @@ CLI引数として要件テキストを渡すことはできません。
 | `--list` | 利用可能なプロンプトセット一覧を表示して終了する |
 | `--dry-run` | CMLデプロイをスキップして設計・コンフィグ生成のみ行う（CML不要） |
 | `--fault-sim` | 全テストPASS後に障害シミュレーション（リンク断・復旧・再テスト）を実行する |
-| `--use-rag` | 修正設計時に過去の成功事例をプロンプトに追加する（要 `chromadb`） |
 | `--troubleshoot [ID]` | 既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索） |
 | `--issue '<説明>'` | --troubleshoot と併用する問題の説明（任意） |
 | `--rag-index [<dir>]` | `rag/` のテキストファイルを知識ベースに索引化する（要 `chromadb`） |
@@ -909,9 +974,6 @@ agentic-ni demo --dry-run
 
 # 障害シミュレーション（全テストPASS後にリンク断・復旧・再テストを実行）
 agentic-ni demo2 --fault-sim
-
-# RAGを有効にして実行（成功時にエラー→成功設計の対応を自動保存）
-agentic-ni demo --use-rag
 
 # 知識ベースのテキストファイルを索引化
 agentic-ni --rag-index
@@ -972,50 +1034,23 @@ app = compile_graph()
 result = app.invoke(initial_state(
     requirement="R1とR2をOSPFエリア0で接続する",
     prompt_set="demo",     # 省略可（デフォルト: 'demo'）
-    use_rag=True,           # 省略可（デフォルト: False）
 ))
 print(result["final_report"])
 ```
 
-### ベクトルRAG機能
-
-本システムの RAG 機能は 2 種類のコレクションで構成されています。
-
-| | 実行ログ RAG (`--use-rag`) | 知識ベース RAG (`--rag-index`) |
-|---|---|---|
-| **データ源** | 実行ログ（エラー→成功設計ペア） | `rag/` 内のテキストファイル |
-| **登録タイミング** | 全テスト PASS 時に自動保存 | `--rag-index` コマンドで手動登録 |
-| **検索タイミング** | 修正設計ループ内 | 設計・診断の毎回自動 |
-| **目的** | 「このエラーは前回どう直したか」 | 「この要件はどう設計するか」 |
-| **ChromaDB コレクション** | `successful_runs` | `knowledge_base` |
-
----
-
-#### 実行ログ RAG（`--use-rag`）
-
-`--use-rag` を指定すると、過去の実行で発生したエラーと最終的に成功した設計を
-[ChromaDB](https://www.trychroma.com/) に保存し、次回以降の修正設計に活用します。
-
-**動作フロー**:
-```
-1回目の実行（--use-rag）:
-  エラー発生 → error_history に蓄積
-  全テストPASS → ChromaDB に (エラーログ, 成功設計) を保存
-
-2回目以降（--use-rag）:
-  修正設計が必要になったとき
-    → 現在のエラーで類似の過去事例を検索
-    → 上位3件をプロンプトに追加（類似度フィルタあり）
-    → 設計エージェントが過去事例を参考に修正
-```
-
----
-
-#### 知識ベース RAG（`--rag-index`）
+### ベクトルRAG機能（知識ベース）
 
 `rag/` ディレクトリに置いたテキストファイルを ChromaDB に登録し、
 設計・トラブルシューティングの際に自動で参照します。
 「社内標準」「設計ガイド」「既知の問題リスト」など、任意の知識を LLM の考慮に取り込めます。
+
+| 項目 | 内容 |
+|---|---|
+| **データ源** | `rag/` 内のテキストファイル |
+| **登録タイミング** | `--rag-index` コマンドで手動登録 |
+| **有効化** | フラグ不要。インデックスがあれば常時有効 |
+| **空の場合** | 検索コストほぼゼロで素通り（副作用なし） |
+| **ChromaDB コレクション** | `knowledge_base` |
 
 **動作フロー**:
 ```

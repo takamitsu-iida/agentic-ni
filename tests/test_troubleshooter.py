@@ -48,7 +48,6 @@ def _base_state(**overrides) -> AgentState:
     base: AgentState = {
         "requirement": "R1 と R2 を OSPF エリア 0 で接続する",
         "prompt_set": "demo",
-        "use_rag": False,
         "fault_simulation_enabled": False,
         "error_history": [],
         "topology_yaml": "",

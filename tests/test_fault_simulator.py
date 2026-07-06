@@ -46,7 +46,6 @@ def _base_state(**overrides) -> AgentState:
     base: AgentState = {
         "requirement": "R1-R2-R3 を OSPF で冗長接続する",
         "prompt_set": "demo",
-        "use_rag": False,
         "error_history": [],
         "topology_yaml": _SAMPLE_TOPOLOGY,
         "device_configs": _SAMPLE_CONFIGS,
