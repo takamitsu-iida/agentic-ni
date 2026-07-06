@@ -182,8 +182,20 @@ def _run_test_items(
     test_items = [TestItem(**d) for d in test_items_dicts]
     results: list[TestResult] = []
     for i, item in enumerate(test_items, 1):
+        # 障害中の ospf_neighbors で期待値指定ありの場合は期待値入りの説明文を表示
+        if (
+            item.test_type == "ospf_neighbors"
+            and expected_neighbor_counts
+            and item.device in expected_neighbor_counts
+        ):
+            display_desc = (
+                f"OSPF ネイバー数確認: {item.device}"
+                f" （期待値: {expected_neighbor_counts[item.device]}）"
+            )
+        else:
+            display_desc = item.description
         print(
-            f"        ({i}/{len(test_items)}) [{label}] {item.description}",
+            f"        ({i}/{len(test_items)}) [{label}] {display_desc}",
             flush=True,
         )
         # ospf_neighbors かつ期待値指定ありの場合は完全一致チェック
