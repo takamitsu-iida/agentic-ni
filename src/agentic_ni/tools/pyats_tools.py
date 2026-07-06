@@ -571,3 +571,109 @@ def configure_interface_shutdown(
             dev.disconnect()
         except Exception:  # noqa: BLE001
             pass
+
+
+def get_running_config(testbed_yaml: str, device_name: str) -> str:
+    """稼働中のデバイスから running-config を取得する。
+
+    Args:
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+        device_name: 対象デバイス名。
+
+    Returns:
+        str: `show running-config` の出力テキスト。
+
+    Raises:
+        KeyError: デバイス名がテストベッドに存在しない場合。
+        ImportError: pyATS/Genie が未インストールの場合。
+    """
+    testbed = _load_testbed(testbed_yaml)
+    dev = _connect_device(testbed, device_name)
+    try:
+        return dev.execute("show running-config")
+    finally:
+        try:
+            dev.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def apply_incremental_config(
+    testbed_yaml: str,
+    device_name: str,
+    config_commands: str,
+) -> None:
+    """稼働中のデバイスにインクリメンタルなコンフィグを投入する。
+
+    `configure terminal` モードで指定コマンドを流し込む。
+    Day-0 config（wipe + restart）とは異なり、ルーターを再起動せずに
+    差分だけを適用できる。
+
+    Args:
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+        device_name: 対象デバイス名。
+        config_commands: configure terminal に流す複数行コマンド。
+
+    Raises:
+        KeyError: デバイス名がテストベッドに存在しない場合。
+        ImportError: pyATS/Genie が未インストールの場合。
+        Exception: コンフィグ投入に失敗した場合。
+    """
+    testbed = _load_testbed(testbed_yaml)
+    dev = _connect_device(testbed, device_name)
+    try:
+        dev.configure(config_commands)
+    finally:
+        try:
+            dev.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def collect_device_state(testbed_yaml: str, device_name: str) -> dict:
+    """デバイスの現在状態（running-config と主要 show コマンド）を収集する。
+
+    トラブルシューティングモードで LLM に与えるコンテキストを取得するために使用する。
+    接続は1回で複数コマンドを実行し、最後に切断する。
+
+    Args:
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+        device_name: 対象デバイス名。
+
+    Returns:
+        dict: {
+            "running_config": str,
+            "show_outputs": {
+                "show ip ospf neighbor": str,
+                "show ip route": str,
+                "show ip interface brief": str,
+            }
+        }
+
+    Raises:
+        KeyError: デバイス名がテストベッドに存在しない場合。
+        ImportError: pyATS/Genie が未インストールの場合。
+    """
+    testbed = _load_testbed(testbed_yaml)
+    dev = _connect_device(testbed, device_name)
+    try:
+        running_config = dev.execute("show running-config")
+        show_outputs: dict[str, str] = {}
+        for cmd in (
+            "show ip ospf neighbor",
+            "show ip route",
+            "show ip interface brief",
+        ):
+            try:
+                show_outputs[cmd] = dev.execute(cmd)
+            except Exception as exc:  # noqa: BLE001
+                show_outputs[cmd] = f"(取得失敗: {exc})"
+        return {
+            "running_config": running_config,
+            "show_outputs": show_outputs,
+        }
+    finally:
+        try:
+            dev.disconnect()
+        except Exception:  # noqa: BLE001
+            pass

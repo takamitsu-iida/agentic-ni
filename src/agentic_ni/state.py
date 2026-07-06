@@ -24,6 +24,17 @@ class FaultScenarioResult(TypedDict):
     passed: bool                  # 復旧後に全テスト PASS なら True
 
 
+class TroubleshootFixRecord(TypedDict):
+    """トラブルシューティングで適用した修正の一件分の記録。"""
+
+    device: str                # 修正対象デバイス名
+    commands: str              # 適用した configure terminal コマンド列
+    rollback_commands: str     # ロールバック用の no コマンド（未使用時は空文字）
+    success: bool              # 適用成功なら True
+    error: str                 # エラーメッセージ（成功時は空文字）
+    description: str           # この修正の目的説明
+
+
 class AgentState(TypedDict):
     """グラフ全体で共有されるステート。"""
 
@@ -74,6 +85,29 @@ class AgentState(TypedDict):
 
     fault_report: str
     """Phase B の障害シミュレーション結果レポート（Markdown）。"""
+
+    # --- Phase H: トラブルシューティングモード ---
+    troubleshoot_lab_id: str
+    """--troubleshoot で指定された既存ラボID（構成検証済みラボ）。"""
+
+    troubleshoot_issue: str
+    """ユーザーが報告した問題の説明（自然言語）。"""
+
+    collected_state: dict
+    """各機器から収集した現在の状態。
+    {device_name: {\"running_config\": str, \"show_outputs\": {cmd: str}}}"""
+
+    diagnosis: str
+    """LLM による根本原因の診断結果。"""
+
+    fix_records: list[TroubleshootFixRecord]
+    """適用した修正の履歴リスト。"""
+
+    troubleshoot_retry_count: int
+    """診断→修正→検証のサイクル数。"""
+
+    troubleshoot_report: str
+    """トラブルシューティング完了時の詳細レポート（Markdown）。"""
 
     # --- 最終出力 ---
     final_report: str

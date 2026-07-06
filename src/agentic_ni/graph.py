@@ -2,6 +2,7 @@
 
 Phase 7: Human-in-the-Loop、レポートフォーマット整備、E2E統合済み。
 障害シミュレーション（リンク断・復旧・再テスト）対応済み。
+Phase H: トラブルシューティングモード（既存ラボへのインクリメンタル修正）対応済み。
 """
 
 from __future__ import annotations
@@ -14,12 +15,13 @@ from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
-from agentic_ni.agents import architect, fault_simulator, validator
+from agentic_ni.agents import architect, fault_simulator, troubleshooter, validator
 from agentic_ni.state import AgentState, FaultScenarioResult
 
 load_dotenv()
 
 MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "5"))
+TROUBLESHOOT_MAX_RETRIES: int = int(os.getenv("TROUBLESHOOT_MAX_RETRIES", "3"))
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +407,200 @@ def dry_run_node(state: AgentState) -> dict:
     return {"final_report": report}
 
 
+# ---------------------------------------------------------------------------
+# Phase H: トラブルシューティングノード
+# ---------------------------------------------------------------------------
+
+
+def troubleshoot_collect_node(state: AgentState) -> dict:
+    """Phase H: 既存ラボの全機器から running-config と show コマンドを収集する。"""
+    print(f"\n{'='*60}", flush=True)
+    print("[トラブルシューティング] 機器状態を収集中...", flush=True)
+    print(f"{'='*60}", flush=True)
+    return troubleshooter.run_collect(state)
+
+
+def troubleshoot_diagnose_node(state: AgentState) -> dict:
+    """Phase H: 収集した状態と失敗テストを LLM で診断する。"""
+    retry = state.get("troubleshoot_retry_count", 0) + 1
+    print(
+        f"\n[トラブルシューティング 診断 {retry}/{TROUBLESHOOT_MAX_RETRIES}]"
+        " 根本原因を分析中...",
+        flush=True,
+    )
+    return troubleshooter.run_diagnose(state)
+
+
+def troubleshoot_fix_node(state: AgentState) -> dict:
+    """Phase H: 診断結果に基づき差分修正コマンドを生成・投入する。"""
+    print("\n[トラブルシューティング] 修正コマンドを生成・投入中...", flush=True)
+    return troubleshooter.run_fix(state)
+
+
+def troubleshoot_verify_node(state: AgentState) -> dict:
+    """Phase H: 修正後にテストを実行して検証する（デプロイなし）。"""
+    print("\n[トラブルシューティング] 検証テストを実行中...", flush=True)
+    from agentic_ni.agents.validator import TestPlan, _build_test_plan_messages, _execute_test
+    from agentic_ni.tools import pyats_tools
+
+    llm = get_llm()
+    structured_llm = llm.with_structured_output(TestPlan, method="function_calling")
+    plan: TestPlan = structured_llm.invoke(_build_test_plan_messages(state))
+    print(f"  テスト計画: {len(plan.tests)} 件", flush=True)
+
+    testbed_yaml = pyats_tools.build_testbed(
+        state.get("lab_id", ""),
+        state.get("device_configs", {}),
+    )
+    test_results = []
+    for i, item in enumerate(plan.tests, 1):
+        print(f"  ({i}/{len(plan.tests)}) {item.description}", flush=True)
+        result = _execute_test(item, testbed_yaml)
+        mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
+        print(f"       → {mark}  {result['detail']}", flush=True)
+        test_results.append(result)
+
+    return {
+        "test_results": test_results,
+        "test_plan_items": [item.model_dump() for item in plan.tests],
+    }
+
+
+def troubleshoot_report_node(state: AgentState) -> dict:
+    """Phase H: トラブルシューティング完了レポートを生成する。"""
+    print("\n  >>> トラブルシューティング完了レポートを生成しています...", flush=True)
+    fix_records = state.get("fix_records", [])
+    test_results = state.get("test_results", [])
+    passed = [r for r in test_results if r["result"] == "PASS"]
+    failed = [r for r in test_results if r["result"] == "FAIL"]
+
+    fix_section = "\n\n".join(
+        f"### 修正 {i}: [{r['device']}] {r.get('description', '')}\n"
+        f"- 結果: {'✅ 成功' if r['success'] else '❌ 失敗'}\n"
+        f"```\n{r['commands']}\n```"
+        + (f"\n- エラー: {r['error']}" if r.get("error") else "")
+        for i, r in enumerate(fix_records, 1)
+    ) or "(修正なし)"
+
+    result_rows = "\n".join(
+        f"| {r['test']} | {'✅ PASS' if r['result'] == 'PASS' else '❌ FAIL'} | {r['detail']} |"
+        for r in test_results
+    ) or "| (テスト未実施) | - | - |"
+
+    verdict = (
+        "✅ すべてのテストが PASS しました。問題が解決されました。"
+        if not failed
+        else f"⚠️ {len(failed)} 件のテストが FAIL のままです。手動確認が必要な可能性があります。"
+    )
+
+    report = (
+        f"# トラブルシューティング完了レポート\n\n"
+        f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"## 対象ラボ\n`{state.get('troubleshoot_lab_id', state.get('lab_id', '(不明)'))}`\n\n"
+        f"## 問題の説明\n{state.get('troubleshoot_issue') or '(説明なし)'}\n\n"
+        f"## 診断結果\n{state.get('diagnosis', '(診断なし)')}\n\n"
+        f"## 適用した修正（{len(fix_records)} 件）\n\n{fix_section}\n\n"
+        f"## 最終テスト結果\n\n"
+        f"| テスト名 | 結果 | 詳細 |\n"
+        f"|---|---|---|\n"
+        f"{result_rows}\n\n"
+        f"## 判定\n{verdict}"
+    )
+    return {"final_report": report, "troubleshoot_report": report}
+
+
+def should_continue_troubleshoot(
+    state: AgentState,
+) -> Literal["complete", "retry", "escalate"]:
+    """トラブルシューティングの検証後ルーティングを決定する。"""
+    test_results = state.get("test_results", [])
+    retry_count = state.get("troubleshoot_retry_count", 0)
+
+    if test_results and all(r["result"] == "PASS" for r in test_results):
+        return "complete"
+    if retry_count >= TROUBLESHOOT_MAX_RETRIES:
+        return "escalate"
+    return "retry"
+
+
+def compile_graph_troubleshoot() -> Any:
+    """トラブルシューティングモード用コンパイル済みグラフを返す。
+
+    フロー: collect → diagnose → fix → verify → (retry: collect に戻る | complete: report)
+    """
+    graph = StateGraph(AgentState)
+
+    graph.add_node("collect", troubleshoot_collect_node)
+    graph.add_node("diagnose", troubleshoot_diagnose_node)
+    graph.add_node("fix", troubleshoot_fix_node)
+    graph.add_node("verify", troubleshoot_verify_node)
+    graph.add_node("report", troubleshoot_report_node)
+    graph.add_node("escalate", escalate_node)
+
+    graph.set_entry_point("collect")
+    graph.add_edge("collect", "diagnose")
+    graph.add_edge("diagnose", "fix")
+    graph.add_edge("fix", "verify")
+
+    graph.add_conditional_edges(
+        "verify",
+        should_continue_troubleshoot,
+        {
+            "complete": "report",
+            "retry": "collect",   # 修正適用後に状態を再収集して再診断
+            "escalate": "escalate",
+        },
+    )
+    graph.add_edge("report", END)
+    graph.add_edge("escalate", END)
+    return graph.compile()
+
+
+def initial_state_troubleshoot(
+    lab_id: str,
+    issue: str = "",
+    prompt_set: str = "demo",
+) -> AgentState:
+    """トラブルシューティングモードの初期ステートを生成するファクトリー関数。
+
+    Args:
+        lab_id: 問題が発生している既存 CML ラボの ID。
+        issue: 問題の説明（自然言語）。省略可。
+        prompt_set: 使用するプロンプトセット名（要件コンテキストと system prompt に使用）。
+    """
+    # requirement.md が存在すれば本来あるべき要件として使う
+    try:
+        requirement = load_requirement(prompt_set)
+    except FileNotFoundError:
+        requirement = issue or f"ラボ {lab_id} のトラブルシューティング"
+
+    return AgentState(
+        requirement=requirement,
+        prompt_set=prompt_set,
+        use_rag=False,
+        fault_simulation_enabled=False,
+        error_history=[],
+        topology_yaml="",
+        device_configs={},
+        lab_id=lab_id,
+        test_results=[],
+        test_plan_items=[],
+        error_log="",
+        retry_count=0,
+        fault_scenario_results=[],
+        fault_report="",
+        # トラブルシューティング固有
+        troubleshoot_lab_id=lab_id,
+        troubleshoot_issue=issue,
+        collected_state={},
+        diagnosis="",
+        fix_records=[],
+        troubleshoot_retry_count=0,
+        troubleshoot_report="",
+        final_report="",
+    )
+
+
 def compile_graph_dry_run():
     """ドライランモード（設計のみ・CMLデプロイなし）のコンパイル済みグラフを返す。"""
     graph = StateGraph(AgentState)
@@ -455,6 +651,13 @@ def initial_state(
         retry_count=0,
         fault_scenario_results=[],
         fault_report="",
+        troubleshoot_lab_id="",
+        troubleshoot_issue="",
+        collected_state={},
+        diagnosis="",
+        fix_records=[],
+        troubleshoot_retry_count=0,
+        troubleshoot_report="",
         final_report="",
     )
 
@@ -490,6 +693,8 @@ def main() -> None:
             "  --dry-run            CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
             "  --use-rag            修正設計時に過去の成功事例をプロンプトに追加する（要 chromadb）\n"
             "  --fault-sim          構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
+            "  --troubleshoot <ID>  既存ラボに対してトラブルシューティングモードを実行する\n"
+            "  --issue '<説明>'     --troubleshoot の問題説明（自然言語、任意）\n"
             "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
             "  -h / --help          このヘルプを表示して終了する\n"
             "\n"
@@ -498,6 +703,8 @@ def main() -> None:
             "  agentic-ni ospf_l3vpn            # ospf_l3vpn セットの要件で実行\n"
             "  agentic-ni demo --dry-run          # CMLなしでコンフィグ生成のみ\n"
             "  agentic-ni demo --use-rag        # RAGを有効にして実行\n"
+            "  agentic-ni demo2 --fault-sim     # 障害シミュレーションありで実行\n"
+            "  agentic-ni demo2 --troubleshoot abc-1234  # 存在ラボをトラブルシュート\n"
             "  agentic-ni --list\n"
             "  agentic-ni --rag-stats"
         )
@@ -525,6 +732,15 @@ def main() -> None:
     dry_run = "--dry-run" in args
     fault_simulation_enabled = "--fault-sim" in args
 
+    # --troubleshoot <lab_id>: トラブルシューティングモード
+    troubleshoot_lab_id: str | None = None
+    troubleshoot_issue: str = ""
+    for i, arg in enumerate(args):
+        if arg == "--troubleshoot" and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            troubleshoot_lab_id = args[i + 1]
+        if arg == "--issue" and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            troubleshoot_issue = args[i + 1]
+
     # 位置引数（フラグ以外）= プロンプトセット名
     positional = [a for a in args if not a.startswith("-")]
     if not positional:
@@ -550,12 +766,25 @@ def main() -> None:
         print(f"RAG: 有効")
     if fault_simulation_enabled:
         print("障害シミュレーション: 有効")
+    if troubleshoot_lab_id:
+        print(f"トラブルシューティングモード: ラボID={troubleshoot_lab_id}")
+        if troubleshoot_issue:
+            print(f"問題説明: {troubleshoot_issue}")
     print()
     print("【要件】")
     for line in requirement.splitlines():
         print(f"  {line}")
     print()
     print("処理を開始します...\n")
+
+    # トラブルシューティングモード
+    if troubleshoot_lab_id:
+        app = compile_graph_troubleshoot()
+        result = app.invoke(
+            initial_state_troubleshoot(troubleshoot_lab_id, troubleshoot_issue, prompt_set)
+        )
+        print(result.get("final_report", "(レポートなし)"))
+        return
 
     app = compile_graph_dry_run() if dry_run else compile_graph()
     result = app.invoke(initial_state(requirement, prompt_set, use_rag, fault_simulation_enabled))
