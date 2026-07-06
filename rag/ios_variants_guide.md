@@ -36,6 +36,7 @@ show version
 show ip interface brief
 show interfaces GigabitEthernet0/0
 show ip route
+show ip route 192.168.1.0
 show ip ospf neighbor
 show ip bgp summary
 show ip protocols
