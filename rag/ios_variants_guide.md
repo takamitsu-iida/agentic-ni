@@ -44,6 +44,14 @@ ping 10.0.0.1 source GigabitEthernet0/0
 traceroute 10.0.0.1 source Loopback0
 ```
 
+## 動作しないコマンドの例
+
+経路情報の確認時にプレフィクス長は指定できない。
+
+```
+show ip route 192.168.1.0/24
+```
+
 ### 設定の特徴
 ```
 interface GigabitEthernet0/0
