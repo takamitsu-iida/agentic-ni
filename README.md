@@ -1317,3 +1317,29 @@ agentic-ni --troubleshoot <lab_id>
 - `graph.py` に `compile_graph_troubleshoot()` を追加
 - 診断モード専用のプロンプトセット（`troubleshoot/architect.md`）を作成
 - 修正提案にとどまり自動変更はしません（安全のため）。
+
+
+```
+iida@s400win:~/git/agentic-ni$ agentic-ni --rag-index
+知識ベースを索引化中: rag
+Traceback (most recent call last):
+  File "/home/iida/git/agentic-ni/.venv/bin/agentic-ni", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/iida/git/agentic-ni/src/agentic_ni/graph.py", line 748, in main
+    count = rag_tools.index_knowledge_files(rag_index_dir)
+  File "/home/iida/git/agentic-ni/src/agentic_ni/tools/rag_tools.py", line 153, in index_knowledge_files
+    clear_knowledge_base()
+    ~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/iida/git/agentic-ni/src/agentic_ni/tools/rag_tools.py", line 248, in clear_knowledge_base
+    client = _get_client()
+  File "/home/iida/git/agentic-ni/src/agentic_ni/tools/rag_tools.py", line 59, in _get_client
+    import chromadb
+  File "/home/iida/git/agentic-ni/.venv/lib/python3.13/site-packages/chromadb/__init__.py", line 151, in <module>
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Your system has an unsupported version of sqlite3. Chroma                     requires sqlite3 >= 3.35.0.
+Please visit                     https://docs.trychroma.com/troubleshooting#sqlite to learn how                     to upgrade.
+iida@s400win:~/git/agentic-ni$
+```
