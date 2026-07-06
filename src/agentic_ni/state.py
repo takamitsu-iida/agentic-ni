@@ -80,6 +80,10 @@ class AgentState(TypedDict):
     fault_simulation_enabled: bool
     """True の場合、Phase A 成功後に障害シミュレーションを実行する。"""
 
+    skip_deploy: bool
+    """True の場合、検証エージェントのデプロイステップをスキップし既存ラボを再利用する。
+    --fault-sim 時に同名ラボが存在する場合に自動設定される。"""
+
     fault_scenario_results: list[FaultScenarioResult]
     """Phase B で実行した各障害シナリオの結果。"""
 

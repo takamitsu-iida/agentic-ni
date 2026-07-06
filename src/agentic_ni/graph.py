@@ -564,6 +564,7 @@ def initial_state_troubleshoot(
         requirement=requirement,
         prompt_set=prompt_set,
         fault_simulation_enabled=False,
+        skip_deploy=False,
         error_history=[],
         topology_yaml="",
         device_configs={},
@@ -611,22 +612,27 @@ def initial_state(
     requirement: str,
     prompt_set: str = "demo",
     fault_simulation_enabled: bool = False,
+    skip_deploy: bool = False,
+    lab_id: str = "",
 ) -> AgentState:
     """初期ステートを生成するファクトリー関数。
 
     Args:
         requirement: ネットワーク要件の自然言語テキスト。
-        prompt_set: 使用するプロンプトセット名（prompts/ 配下のサブディレクトリ名）。
-        fault_simulation_enabled: True の場合、過去の成功後に障害シミュレーションを実行する。
+        prompt_set: 使用するプロンプトセット名。
+        fault_simulation_enabled: True の場合、Phase A 成功後に障害シミュレーションを実行する。
+        skip_deploy: True の場合、検証エージェントのデプロイをスキップし既存ラボを再利用する。
+        lab_id: skip_deploy=True 時に指定する既存ラボID。
     """
     return AgentState(
         requirement=requirement,
         prompt_set=prompt_set,
         fault_simulation_enabled=fault_simulation_enabled,
+        skip_deploy=skip_deploy,
         error_history=[],
         topology_yaml="",
         device_configs={},
-        lab_id="",
+        lab_id=lab_id,
         test_results=[],
         test_plan_items=[],
         error_log="",
@@ -822,7 +828,23 @@ def main() -> None:
         return
 
     app = compile_graph_dry_run() if dry_run else compile_graph()
-    result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled))
+
+    # --fault-sim 時に同名ラボが既存かどうか確認し、あればデプロイをスキップ
+    skip_deploy = False
+    existing_lab_id = ""
+    if fault_simulation_enabled and not dry_run:
+        lab_title = f"agentic-ni-{prompt_set}"
+        try:
+            from agentic_ni.tools import cml_tools as _cml
+            found = _cml.find_lab_by_title(lab_title)
+            if found:
+                skip_deploy = True
+                existing_lab_id = found
+                print(f"既存ラボを検出: {lab_title} (ID={found}) → デプロイをスキップして障害検証を実施します")
+        except Exception:  # noqa: BLE001
+            pass  # CML 未接続時は無視して通常フローへ
+
+    result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id))
     print(result.get("final_report", "(レポートなし)"))
 
 

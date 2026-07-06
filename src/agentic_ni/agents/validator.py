@@ -286,15 +286,18 @@ def _execute_test(item: TestItem, testbed_yaml: str) -> TestResult:
 
 
 def _deploy(state: AgentState) -> str:
-    """CMLにトポロジーをデプロイし、全ノードが起動するまで待機する。
+    """デプロイ済みラボの再利用、または新規デプロイを行う。
 
-    Returns:
-        str: デプロイしたラボのID。
-
-    Raises:
-        RuntimeError: デプロイまたは起動待機に失敗した場合。
+    skip_deploy=True の場合はデプロイを一切追わず、既存の lab_id を返す。
     """
     from agentic_ni.tools import cml_tools
+
+    # skip_deploy=True: 既存ラボをそのまま利用（再起動・コンフィグ更新なし）
+    if state.get("skip_deploy", False):
+        existing_id = state.get("lab_id", "")
+        if existing_id:
+            print(f"    既存ラボを再利用（デプロイスキップ）: lab_id={existing_id}", flush=True)
+            return existing_id
 
     topology_yaml = state.get("topology_yaml", "")
     device_configs = state.get("device_configs", {})
