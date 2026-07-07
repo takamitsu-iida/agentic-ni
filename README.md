@@ -1078,63 +1078,159 @@ agentic-ni --help
 ```
 
 **要件はプロンプトセット内の `requirement.md` に記載します。**
-CLI引数として要件テキストを渡すことはできません。
+CLI 引数として要件テキストを渡すことはできません。
 
 ### オプション一覧
 
 | オプション | 説明 |
 |---|---|
 | `--list` | 利用可能なプロンプトセット一覧を表示して終了する |
-| `--dry-run` | CMLデプロイをスキップして設計・コンフィグ生成のみ行う（CML不要） |
-| `--fault-sim` | 全テストPASS後に障害シミュレーション（リンク断・復旧・再テスト）を実行する |
+| `--dry-run` | CML デプロイをスキップして設計・コンフィグ生成のみ行う（CML 不要） |
+| `--fault-sim` | 全テスト PASS 後に障害シミュレーション（リンク断・復旧・再テスト）を実行する |
 | `--troubleshoot [ID]` | 既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索） |
-| `--issue '<説明>'` | --troubleshoot と併用する問題の説明（任意） |
-| `--analyze [ID]` | 既存ラボの設計を分析しレポートを出力する（変更なし） |
+| `--issue '<説明>'` | `--troubleshoot` と併用する問題の説明（任意） |
+| `--analyze [ID]` | 既存ラボの設計を分析してレポートを出力する（変更なし） |
 | `--improve [ID]` | 既存ラボのコンフィグを改善して `configs/<set>/` に保存する |
-| `--request '<改善要求>'` | --improve と併用する改善要求テキスト（任意） |
+| `--request '<改善要求>'` | `--improve` と併用する改善要求テキスト（任意） |
 | `--rag-index [<dir>]` | `rag/` のテキストファイルを知識ベースに索引化する（要 `chromadb`） |
 | `--rag-clear-knowledge` | 知識ベースのインデックスを全消去する |
-| `--rag-stats` | 実行ログRAG・知識ベースの保存件数と保存場所を表示して終了する |
+| `--rag-stats` | 実行ログ RAG・知識ベースの保存件数と保存場所を表示して終了する |
 | `-h` / `--help` | ヘルプを表示して終了する |
 
-### 使用例
+---
+
+### モード別の使い方
+
+#### 1. 通常モード — 要件から設計・デプロイ・検証まで自動実行
 
 ```bash
-# demo セットの要件で実行
 agentic-ni demo
+agentic-ni ospf_l3vpn
+```
 
-# 利用可能なプロンプトセット一覧を表示
+`prompts/<プロンプトセット名>/requirement.md` の要件を読み込み、設計 → CML デプロイ → 検証 → 修正ループを実行します。全テスト PASS 後に最終レポートを出力し、設計ドキュメント（IP 台帳・ルーティング設計書）を `configs/<set>/` に保存します。
+
+利用可能なプロンプトセット一覧を確認:
+```bash
 agentic-ni --list
+```
 
-# プロンプトセットを指定して実行（そのセットの requirement.md が使われる）
-agentic-ni static
+---
 
-# CML不要モード（デプロイなしでコンフィグ生成のみ）
+#### 2. ドライランモード（Phase C/D）— CML 不要・設計ドキュメント生成のみ
+
+```bash
 agentic-ni demo --dry-run
-# → configs/demo/topology.yaml, R1.cfg, R2.cfg が生成される
+```
 
-# 障害シミュレーション（全テストPASS後にリンク断・復旧・再テストを実行）
+CML へのデプロイと検証テストをスキップして、設計・コンフィグ生成のみ実行します。
+以下のファイルが `configs/demo/` に保存されます:
+
+```
+configs/demo/
+  topology.yaml       ← CML トポロジー定義
+  R1.cfg              ← R1 コンフィグ
+  R2.cfg              ← R2 コンフィグ
+  ip_ledger.md        ← IP アドレス台帳（Markdown テーブル）
+  ip_ledger.csv       ← IP アドレス台帳（CSV）
+  routing_design.md   ← OSPF / BGP ルーティング設計書
+```
+
+CML 環境なしでコンフィグ生成や設計ドキュメントを確認したい場合に使います。
+
+---
+
+#### 3. 障害シミュレーションモード（Phase B）— リンク断・復旧・再テスト
+
+```bash
 agentic-ni demo2 --fault-sim
+```
 
-# 既存ラボの設計を分析（変更なし・レポートのみ）
+通常モードで全テスト PASS した後、CML 上でリンクを順番に切断・復旧させて冗長性を検証します。
+`demo2` セット（R1-R2-R3 フルメッシュ OSPF）で実行すると、3 つのリンク断シナリオを自動実施します。
+
+---
+
+#### 4. トラブルシューティングモード（Phase H）— 既存ラボの診断・自動修正
+
+```bash
+# demo ラボをタイトルで自動検索してトラブルシュート
+agentic-ni demo --troubleshoot
+
+# lab_id を明示して実行
+agentic-ni demo --troubleshoot abc-1234
+
+# 問題の説明を添える
+agentic-ni demo --troubleshoot abc-1234 --issue 'OSPF ネイバーが確立しない'
+```
+
+既存の稼働中 CML ラボに接続し、`collect → diagnose → fix → verify` のサイクルを最大 3 回繰り返して問題を自動修正します。
+
+- `lab_id` を省略した場合、`agentic-ni-<プロンプトセット名>` というタイトルのラボを自動検索します
+- 修正は `configure terminal` による差分投入のみ（wipe・再デプロイなし）
+
+---
+
+#### 5. 設計分析モード（Phase E: --analyze）— 既存ラボの品質評価
+
+```bash
+# demo ラボを自動検索して分析
 agentic-ni demo --analyze
-agentic-ni demo --analyze abc-1234   # lab_id を明示して分析
 
-# 既存ラボのコンフィグを改善して configs/demo/ に保存
-agentic-ni demo --improve --request 'OSPFにBFDを追加したい'
-agentic-ni demo --improve abc-1234 --request 'Loopbackインターフェースを追加'
+# lab_id を明示して分析
+agentic-ni demo --analyze abc-1234
+```
 
-# 知識ベースのテキストファイルを索引化
+既存の稼働中 CML ラボから running-config を収集し、設計品質を評価してレポートを出力します。
+変更は一切加えません（読み取り専用）。
+
+出力例:
+```
+## 設計評価: ⚠️ 要改善
+
+### 検出された問題 (2 件)
+| 重大度 | デバイス | 問題 | 推奨対応 |
+|---|---|---|---|
+| WARNING | R1 | router-id が未設定 | router ospf 1 で router-id 1.1.1.1 を設定 |
+| INFO    | all | no ip domain-lookup が未設定 | グローバルで no ip domain-lookup を追加 |
+```
+
+---
+
+#### 6. 設計改善モード（Phase E: --improve）— 改善コンフィグをファイル生成
+
+```bash
+# demo ラボを自動検索して改善
+agentic-ni demo --improve --request 'OSPF に BFD を追加したい'
+
+# lab_id を明示して改善
+agentic-ni demo --improve abc-1234 --request 'Loopback インターフェースを追加して router-id を安定させたい'
+```
+
+既存ラボから running-config を収集し、改善要求に基づいて改善後のコンフィグを生成します。
+`configs/<set>/<device>.cfg` に保存されますが、CML への適用は行いません（deploy なし）。
+
+---
+
+#### 7. RAG 知識ベース操作
+
+```bash
+# rag/ 内のファイルを知識ベースに索引化（初回・ファイル追加後に実行）
 agentic-ni --rag-index
 
 # 索引化するディレクトリを指定
 agentic-ni --rag-index ./my_docs
 
-# RAGストアの統計確認
+# 知識ベースのインデックスを全消去
+agentic-ni --rag-clear-knowledge
+
+# 保存件数と保存場所を確認
 agentic-ni --rag-stats
 ```
 
-設計エージェントのループ1回のみ実行し、検証（テスト）はスキップされます。
+索引化後は、通常モード・ドライランモードの設計プロンプトに関連チャンクが自動追加されます。フラグ不要です。
+
+---
 
 ### プロンプトセットの追加方法
 
@@ -1148,12 +1244,12 @@ agentic-ni --rag-stats
 **プロンプトの構築方式**:
 ```
 【設計エージェント】
-prompts/architect_system.md   ← 常に読み込む（役割・YAML形式・出力ルール）
+prompts/architect_system.md      ← 常に読み込む（役割・YAML形式・出力ルール）
   +
 prompts/<セット名>/architect.md  ← あれば末尾に追記（IPアドレス仕様・固有ヒント）
 
 【検証エージェント】
-prompts/validator_system.md   ← 常に読み込む（役割・テストタイプ・汎用ガイドライン）
+prompts/validator_system.md      ← 常に読み込む（役割・テストタイプ・汎用ガイドライン）
   +
 prompts/<セット名>/validator.md  ← あれば末尾に追記（必須テスト一覧・固有失敗パターン）
 ```
@@ -1161,11 +1257,8 @@ prompts/<セット名>/validator.md  ← あれば末尾に追記（必須テス
 ```bash
 # 例: BGP 設計用セットを追加
 mkdir -p src/agentic_ni/prompts/bgp_design
-
-# requirement.md は必須
-# architect_system.md / validator_system.md は任意（省略時は共通プロンプトが使われる）
 cp src/agentic_ni/prompts/demo/requirement.md src/agentic_ni/prompts/bgp_design/
-# requirement.md を編集してBGP要件を記載する
+# requirement.md を編集して BGP 要件を記載する
 
 # 追加後に確認
 agentic-ni --list
@@ -1174,17 +1267,70 @@ agentic-ni --list
 #   - demo
 ```
 
-### Python コードから実行する場合
+---
+
+### Python API から実行する場合
+
+#### 通常モード
 
 ```python
 from agentic_ni.graph import compile_graph, initial_state
 
 app = compile_graph()
 result = app.invoke(initial_state(
-    requirement="R1とR2をOSPFエリア0で接続する",
-    prompt_set="demo",     # 省略可（デフォルト: 'demo'）
+    requirement="R1 と R2 を OSPF エリア 0 で接続する",
+    prompt_set="demo",
 ))
 print(result["final_report"])
+```
+
+#### トラブルシューティングモード
+
+```python
+from agentic_ni.graph import compile_graph_troubleshoot, initial_state_troubleshoot
+
+app = compile_graph_troubleshoot()
+result = app.invoke(initial_state_troubleshoot(
+    lab_id="abc-1234",
+    issue="OSPF ネイバーが確立しない",
+    prompt_set="demo",
+))
+print(result["final_report"])
+```
+
+#### 設計分析モード
+
+```python
+from agentic_ni.graph import compile_graph_analyze, initial_state_analyze
+
+app = compile_graph_analyze()
+result = app.invoke(initial_state_analyze(lab_id="abc-1234", prompt_set="demo"))
+print(result["final_report"])
+```
+
+#### 設計改善モード
+
+```python
+from agentic_ni.graph import compile_graph_improve, initial_state_improve
+
+app = compile_graph_improve()
+result = app.invoke(initial_state_improve(
+    lab_id="abc-1234",
+    analyze_request="OSPF に BFD を追加したい",
+    prompt_set="demo",
+))
+print(result["final_report"])
+```
+
+#### ドライランモード
+
+```python
+from agentic_ni.graph import compile_graph_dry_run, initial_state
+
+app = compile_graph_dry_run()
+result = app.invoke(initial_state(requirement="R1 と R2 を OSPF で接続する", prompt_set="demo"))
+print(result["final_report"])
+# → configs/demo/ に topology.yaml, R1.cfg, R2.cfg, ip_ledger.md 等が保存される
 ```
 
 ### ベクトルRAG機能（知識ベース）
@@ -1462,22 +1608,52 @@ agentic-ni demo --dry-run
 
 <br>
 
-### Phase D — 設計ドキュメント自動生成（工数中）
+### Phase D — 設計ドキュメント自動生成（工数中） ✅ 完了
 
-**目標**: 最終レポートに加えて、実務で使えるドキュメントを生成します。
+**目標**: 検証成功後またはドライラン実行後に、実務で使えるドキュメントを自動生成してファイルに保存します。
 
-生成するドキュメント:
+**生成ドキュメント**:
 
-| ドキュメント | 内容 |
-|---|---|
-| IPアドレス台帳 | ノード・インターフェース・IPアドレスの一覧表（Markdown/CSV） |
-| ルーティング設計書 | OSPFエリア構成、BGP AS番号・ピア構成の概要 |
-| コンフィグファイル群 | 機器ごとに `configs/R1.cfg`、`configs/R2.cfg` として保存 |
+| ドキュメント | ファイル名 | 内容 |
+|---|---|---|
+| IP アドレス台帳 | `ip_ledger.md` | デバイス・インターフェース・CIDR・サブネットの一覧表（Markdown） |
+| IP アドレス台帳 | `ip_ledger.csv` | 同上（CSV）|
+| ルーティング設計書 | `routing_design.md` | OSPF プロセス ID・Router-ID・エリア・BGP AS 番号・ネイバーのサマリー |
+| コンフィグファイル群 | `<device>.cfg` | 機器ごとの running-config |
+| トポロジー定義 | `topology.yaml` | CML 向けトポロジー YAML |
 
-**実装方針**:
-- `report_node()` にドキュメント生成処理を追加
-- `logs/` または `configs/` ディレクトリに自動保存
-- トポロジーYAMLをパースしてIPアドレス台帳を構築
+**タスク**:
+- [x] `graph.py` に `_parse_ip_ledger(device_configs)` を実装（regex で IP アドレス抽出）
+- [x] `graph.py` に `_parse_routing_config(device_configs)` を実装（OSPF / BGP 設定抽出）
+- [x] `graph.py` に `_generate_design_docs(state, out_dir)` を実装
+  - topology.yaml + .cfg + ip_ledger.md + ip_ledger.csv + routing_design.md を `configs/<prompt_set>/` に保存
+  - final_report に追記する Markdown サマリーを返す
+- [x] `report_node()` から `_generate_design_docs()` を呼び出すよう変更
+- [x] `dry_run_node()` を `_generate_design_docs()` を利用するよう更新
+- [x] `tests/test_design_docs.py` でユニットテスト 38 件 PASS
+
+**出力ファイル例（`agentic-ni demo` 実行後）**:
+```
+configs/demo/
+  topology.yaml        ← CML トポロジー定義
+  R1.cfg               ← R1 コンフィグ
+  R2.cfg               ← R2 コンフィグ
+  ip_ledger.md         ← IP アドレス台帳（Markdown）
+  ip_ledger.csv        ← IP アドレス台帳（CSV）
+  routing_design.md    ← OSPF / BGP 設計サマリー
+```
+
+**ip_ledger.md の出力例**:
+```
+| デバイス | インターフェース | アドレス（CIDR） | サブネット |
+|---|---|---|---|
+| R1 | GigabitEthernet0/0 | 10.0.12.1/30 | 10.0.12.0/30 |
+| R1 | Loopback0 | 1.1.1.1/32 | 1.1.1.1/32 |
+| R2 | GigabitEthernet0/0 | 10.0.12.2/30 | 10.0.12.0/30 |
+| R2 | Loopback0 | 2.2.2.2/32 | 2.2.2.2/32 |
+```
+
+**完了基準**: `agentic-ni demo` または `agentic-ni demo --dry-run` 実行後に `configs/demo/` へ上記 5 種のファイルが自動保存されること。 ✅ 完了（38 件ユニットテスト PASS）
 
 <br>
 

@@ -2,14 +2,20 @@
 
 Phase 7: Human-in-the-Loop、レポートフォーマット整備、E2E統合済み。
 障害シミュレーション（リンク断・復旧・再テスト）対応済み。
+Phase D: 設計ドキュメント自動生成（IP台帳・ルーティング設計書・コンフィグ保存）対応済み。
 Phase H: トラブルシューティングモード（既存ラボへのインクリメンタル修正）対応済み。
 Phase E: 設計分析（--analyze）・改善計画生成（--improve）対応済み。
 """
 
 from __future__ import annotations
 
+import csv
+import io
+import ipaddress
 import os
+import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
@@ -90,6 +96,11 @@ def report_node(state: AgentState) -> dict:
         f"{result_lines}\n\n"
         f"すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。"
     )
+    # Phase D: 設計ドキュメントを生成・保存する
+    prompt_set: str = state.get("prompt_set", "demo")
+    out_dir = Path("configs") / prompt_set
+    docs_section = _generate_design_docs(state, out_dir)
+    report += docs_section
     _save_to_rag(state)
     return {"final_report": report}
 
@@ -100,8 +111,306 @@ def _save_to_rag(state: AgentState) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 障害シミュレーション ノード定義
+# Phase D: 設計ドキュメント生成
 # ---------------------------------------------------------------------------
+
+
+def _parse_ip_ledger(device_configs: dict[str, str]) -> list[dict]:
+    """デバイスコンフィグから全インターフェースの IP アドレスを抽出する。
+
+    Args:
+        device_configs: {デバイス名: コンフィグテキスト} のマッピング。
+
+    Returns:
+        list[dict]: 各インターフェースのレコードリスト。
+            各要素は {"device", "interface", "ip_address", "prefix_length", "cidr", "subnet"}。
+    """
+    rows: list[dict] = []
+    for device, config in device_configs.items():
+        current_intf: str | None = None
+        for line in config.splitlines():
+            m = re.match(r"^interface\s+(\S+)", line)
+            if m:
+                current_intf = m.group(1)
+                continue
+            if current_intf is None:
+                continue
+            m = re.match(
+                r"\s+ip address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)", line
+            )
+            if m:
+                ip_addr, mask = m.group(1), m.group(2)
+                try:
+                    net = ipaddress.IPv4Network(f"{ip_addr}/{mask}", strict=False)
+                    prefix_len = net.prefixlen
+                    subnet = str(net)
+                except ValueError:
+                    prefix_len, subnet = 0, ""
+                rows.append(
+                    {
+                        "device": device,
+                        "interface": current_intf,
+                        "ip_address": ip_addr,
+                        "prefix_length": prefix_len,
+                        "cidr": f"{ip_addr}/{prefix_len}",
+                        "subnet": subnet,
+                    }
+                )
+    return rows
+
+
+def _parse_routing_config(
+    device_configs: dict[str, str],
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """デバイスコンフィグから OSPF / BGP 設定を抽出する。
+
+    Args:
+        device_configs: {デバイス名: コンフィグテキスト} のマッピング。
+
+    Returns:
+        tuple[ospf_info, bgp_info]:
+            ospf_info: {デバイス名: {"process_id", "router_id", "networks", "areas"}}
+            bgp_info:  {デバイス名: {"local_as", "neighbors"}}
+    """
+    ospf_info: dict[str, dict] = {}
+    bgp_info: dict[str, dict] = {}
+
+    for device, config in device_configs.items():
+        section: str | None = None
+        cur: dict = {}
+        for line in config.splitlines():
+            m = re.match(r"^router ospf\s+(\d+)", line)
+            if m:
+                section = "ospf"
+                cur = {
+                    "process_id": m.group(1),
+                    "router_id": None,
+                    "networks": [],
+                    "areas": [],
+                }
+                ospf_info[device] = cur
+                continue
+            m = re.match(r"^router bgp\s+(\d+)", line)
+            if m:
+                section = "bgp"
+                cur = {"local_as": m.group(1), "neighbors": []}
+                bgp_info[device] = cur
+                continue
+            # セクション終了（インデントなし行 または ! コメント）
+            if line and not line[0].isspace() and section:
+                section = None
+                cur = {}
+                continue
+
+            if section == "ospf":
+                m = re.match(r"\s+router-id\s+(\S+)", line)
+                if m:
+                    cur["router_id"] = m.group(1)
+                m = re.match(r"\s+network\s+(\S+)\s+(\S+)\s+area\s+(\S+)", line)
+                if m:
+                    area = m.group(3)
+                    cur["networks"].append(
+                        {"network": m.group(1), "wildcard": m.group(2), "area": area}
+                    )
+                    if area not in cur["areas"]:
+                        cur["areas"].append(area)
+
+            elif section == "bgp":
+                m = re.match(r"\s+neighbor\s+(\S+)\s+remote-as\s+(\d+)", line)
+                if m:
+                    cur["neighbors"].append(
+                        {"peer": m.group(1), "remote_as": m.group(2)}
+                    )
+
+    return ospf_info, bgp_info
+
+
+def _generate_design_docs(state: AgentState, out_dir: Path) -> str:
+    """設計ドキュメントを生成してファイルに保存し、Markdown サマリーを返す。
+
+    生成ドキュメント:
+        topology.yaml      — CML トポロジー定義（topology_yaml が存在する場合）
+        <device>.cfg       — 機器ごとのコンフィグ
+        ip_ledger.md       — IP アドレス台帳（Markdown テーブル）
+        ip_ledger.csv      — IP アドレス台帳（CSV）
+        routing_design.md  — ルーティング設計書（OSPF / BGP サマリー）
+
+    Args:
+        state: 現在のエージェントステート。
+        out_dir: 保存先ディレクトリ（configs/<prompt_set>/）。
+
+    Returns:
+        str: final_report に追記する Markdown テキスト。
+    """
+    device_configs: dict[str, str] = state.get("device_configs", {})
+    topology_yaml: str = state.get("topology_yaml", "")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    saved: list[str] = []
+
+    # ------------------------------------------------------------------
+    # 1. topology.yaml + .cfg ファイル保存
+    # ------------------------------------------------------------------
+    if topology_yaml.strip():
+        topo_path = out_dir / "topology.yaml"
+        topo_path.write_text(topology_yaml, encoding="utf-8")
+        saved.append(str(topo_path))
+
+    for device, cfg in device_configs.items():
+        cfg_path = out_dir / f"{device}.cfg"
+        cfg_path.write_text(cfg, encoding="utf-8")
+        saved.append(str(cfg_path))
+
+    # ------------------------------------------------------------------
+    # 2. IP アドレス台帳の生成・保存
+    # ------------------------------------------------------------------
+    ip_rows = _parse_ip_ledger(device_configs)
+
+    if ip_rows:
+        ip_md_rows = "\n".join(
+            f"| {r['device']} | {r['interface']} | {r['cidr']} | {r['subnet']} |"
+            for r in ip_rows
+        )
+        ip_ledger_md = (
+            "# IP アドレス台帳\n\n"
+            f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            "| デバイス | インターフェース | アドレス（CIDR） | サブネット |\n"
+            "|---|---|---|---|\n"
+            f"{ip_md_rows}\n"
+        )
+    else:
+        ip_ledger_md = "# IP アドレス台帳\n\n(IP アドレスが設定されたインターフェースがありません)\n"
+
+    ip_ledger_path = out_dir / "ip_ledger.md"
+    ip_ledger_path.write_text(ip_ledger_md, encoding="utf-8")
+    saved.append(str(ip_ledger_path))
+
+    csv_buf = io.StringIO()
+    csv_writer = csv.DictWriter(
+        csv_buf,
+        fieldnames=["device", "interface", "ip_address", "prefix_length", "cidr", "subnet"],
+    )
+    csv_writer.writeheader()
+    csv_writer.writerows(ip_rows)
+    ip_csv_path = out_dir / "ip_ledger.csv"
+    ip_csv_path.write_text(csv_buf.getvalue(), encoding="utf-8")
+    saved.append(str(ip_csv_path))
+
+    # ------------------------------------------------------------------
+    # 3. ルーティング設計書の生成・保存
+    # ------------------------------------------------------------------
+    ospf_info, bgp_info = _parse_routing_config(device_configs)
+
+    routing_parts: list[str] = [
+        "# ルーティング設計書\n",
+        f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+    ]
+
+    if ospf_info:
+        routing_parts.append("\n## OSPF 設定\n")
+        for device, info in ospf_info.items():
+            areas = ", ".join(f"エリア {a}" for a in info["areas"]) or "(なし)"
+            nets = (
+                "\n".join(
+                    f"  - `network {n['network']} {n['wildcard']} area {n['area']}`"
+                    for n in info["networks"]
+                )
+                or "  (なし)"
+            )
+            routing_parts.append(
+                f"### {device}\n"
+                f"- プロセス ID: `ospf {info['process_id']}`\n"
+                f"- Router-ID: `{info['router_id'] or '(未設定)'}`\n"
+                f"- エリア: {areas}\n"
+                f"- network 文:\n{nets}\n"
+            )
+    else:
+        routing_parts.append("\n## OSPF 設定\n\n(OSPF 設定なし)\n")
+
+    if bgp_info:
+        routing_parts.append("\n## BGP 設定\n")
+        for device, info in bgp_info.items():
+            neighbors = (
+                "\n".join(
+                    f"  - `{n['peer']}` (remote-as {n['remote_as']})"
+                    for n in info["neighbors"]
+                )
+                or "  (なし)"
+            )
+            routing_parts.append(
+                f"### {device}\n"
+                f"- ローカル AS: `{info['local_as']}`\n"
+                f"- ネイバー:\n{neighbors}\n"
+            )
+    else:
+        routing_parts.append("\n## BGP 設定\n\n(BGP 設定なし)\n")
+
+    routing_design_md = "\n".join(routing_parts)
+    routing_path = out_dir / "routing_design.md"
+    routing_path.write_text(routing_design_md, encoding="utf-8")
+    saved.append(str(routing_path))
+
+    # ------------------------------------------------------------------
+    # 4. final_report に追記する Markdown サマリー
+    # ------------------------------------------------------------------
+    files_list = "\n".join(f"- `{f}`" for f in saved)
+
+    # IP台帳インライン表示（20 行まで）
+    if ip_rows:
+        display_rows = ip_rows[:20]
+        ip_inline_rows = "\n".join(
+            f"| {r['device']} | {r['interface']} | {r['cidr']} |"
+            for r in display_rows
+        )
+        if len(ip_rows) > 20:
+            ip_inline_rows += f"\n| ... | ... | ({len(ip_rows) - 20} 件のみ省略) |"
+        ip_inline = (
+            "| デバイス | インターフェース | アドレス（CIDR） |\n"
+            "|---|---|---|\n"
+            f"{ip_inline_rows}"
+        )
+    else:
+        ip_inline = "(IP アドレス設定なし)"
+
+    # ルーティングサマリーインライン表示
+    routing_summary_parts: list[str] = []
+    if ospf_info:
+        all_areas: list[str] = []
+        for info in ospf_info.values():
+            for a in info["areas"]:
+                if a not in all_areas:
+                    all_areas.append(a)
+        ospf_devices = ", ".join(
+            f"`{d}` (プロセス {info['process_id']})"
+            for d, info in ospf_info.items()
+        )
+        routing_summary_parts.append(
+            f"**OSPF**: {ospf_devices}  \n"
+            f"エリア: {', '.join(f'エリア {a}' for a in all_areas)}"
+        )
+    if bgp_info:
+        bgp_devices = ", ".join(
+            f"`{d}` (AS {info['local_as']}, {len(info['neighbors'])} ネイバー)"
+            for d, info in bgp_info.items()
+        )
+        routing_summary_parts.append(f"**BGP**: {bgp_devices}")
+    if not routing_summary_parts:
+        routing_summary_parts.append("(ルーティングプロトコル設定なし)")
+
+    routing_inline = "\n\n".join(routing_summary_parts)
+
+    summary_md = (
+        f"\n\n---\n\n"
+        f"## 設計ドキュメント（Phase D）\n\n"
+        f"### IP アドレス台帳\n\n{ip_inline}\n\n"
+        f"### ルーティング設計サマリー\n\n{routing_inline}\n\n"
+        f"### 保存先ファイル\n\n{files_list}"
+    )
+
+    print(
+        f"  [Phase D] 設計ドキュメント生成完了: {out_dir} ({len(saved)} ファイル)",
+        flush=True,
+    )
+    return summary_md
 
 
 def fault_simulate_node(state: AgentState) -> dict:
@@ -349,31 +658,16 @@ def compile_graph():
 
 
 def dry_run_node(state: AgentState) -> dict:
-    """ドライランモードの出力ノード。設計結果を表示してファイルに保存する。"""
-    import os
-    from pathlib import Path
-
+    """Phase C/D: ドライランモードの出力ノード。設計結果を表示しファイルに保存する。"""
     topology_yaml: str = state.get("topology_yaml", "")
     device_configs: dict[str, str] = state.get("device_configs", {})
     prompt_set: str = state.get("prompt_set", "demo")
 
-    # configs/<set_name>/ ディレクトリに保存
     out_dir = Path("configs") / prompt_set
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # topology.yaml を保存
-    topo_path = out_dir / "topology.yaml"
-    topo_path.write_text(topology_yaml, encoding="utf-8")
+    # コンフィグ保存 + IP台帳 + ルーティング設計書を生成・保存する
+    docs_section = _generate_design_docs(state, out_dir)
 
-    # 機器ごとのコンフィグを <device>.cfg として保存
-    saved_files: list[str] = [str(topo_path)]
-    for device, config in device_configs.items():
-        cfg_path = out_dir / f"{device}.cfg"
-        cfg_path.write_text(config, encoding="utf-8")
-        saved_files.append(str(cfg_path))
-
-    # コンソール表示
-    sep = "=" * 60
     device_section = "\n\n".join(
         f"### {dev}\n```\n{cfg.strip()}\n```"
         for dev, cfg in device_configs.items()
@@ -386,9 +680,8 @@ def dry_run_node(state: AgentState) -> dict:
         f"## トポロジー定義（CML YAML）\n\n"
         f"```yaml\n{topology_yaml.strip()}\n```\n\n"
         f"## 機器コンフィグ\n\n"
-        f"{device_section}\n\n"
-        f"## 保存先\n\n"
-        + "\n".join(f"- `{f}`" for f in saved_files)
+        f"{device_section}"
+        f"{docs_section}"
     )
     return {"final_report": report}
 
