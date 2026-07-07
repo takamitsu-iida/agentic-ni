@@ -1,0 +1,30 @@
+# inventory/demo.yaml
+# demo プロンプトセット向け 実機インベントリ
+#
+# 使い方:
+#   agentic-ni demo --apply-to-live
+#   agentic-ni demo --apply-to-live --inventory inventory/demo.yaml
+#
+# 認証情報は直書きせず、環境変数（.env の LIVE_USERNAME / LIVE_PASSWORD）を参照します。
+# ${VAR_NAME} 形式で記述すると実行時に展開されます。
+
+metadata:
+  description: "demo セット向け実機インベントリ（R1-R2 OSPF + iBGP）"
+  prompt_set: "demo"
+
+devices:
+  R1:
+    host: "192.168.100.1"           # 実機の管理 IP アドレスに変更してください
+    device_type: "cisco_ios"         # Netmiko の device_type
+    username: "${LIVE_USERNAME}"     # .env の LIVE_USERNAME を参照
+    password: "${LIVE_PASSWORD}"     # .env の LIVE_PASSWORD を参照
+    port: 22
+    apply_mode: "config_merge"       # config_merge / config_replace / incremental
+
+  R2:
+    host: "192.168.100.2"
+    device_type: "cisco_ios"
+    username: "${LIVE_USERNAME}"
+    password: "${LIVE_PASSWORD}"
+    port: 22
+    apply_mode: "config_merge"

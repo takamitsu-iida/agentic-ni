@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import ipaddress
 import logging
+import os
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -153,6 +154,68 @@ def build_testbed(lab_id: str, device_configs: dict[str, str]) -> str:
             }
 
     return _yaml.dump(data, default_flow_style=False, allow_unicode=True)
+
+
+def _device_type_to_pyats_os(device_type: str) -> str:
+    """Netmiko の device_type 文字列を pyATS の ``os`` フィールド値に変換する。
+
+    対応表に存在しない device_type は ``"ios"`` にフォールバックする。
+    """
+    mapping: dict[str, str] = {
+        "cisco_ios": "ios",
+        "cisco_xe": "iosxe",
+        "cisco_ios_xe": "iosxe",
+        "cisco_nxos": "nxos",
+        "cisco_nxos_ssh": "nxos",
+        "cisco_xr": "iosxr",
+        "arista_eos": "eos",
+        "juniper_junos": "junos",
+    }
+    return mapping.get(device_type.lower(), "ios")
+
+
+def build_testbed_from_inventory(devices: dict[str, dict]) -> str:
+    """インベントリ辞書から pyATS テストベッド YAML を生成する（実機接続用）。
+
+    CML 経由ではなく SSH で直接接続するテストベッドを生成する。
+    ``--live-verify`` オプション使用時に :func:`live_verify_node` から呼び出される。
+
+    Args:
+        devices: :func:`~agentic_ni.tools.netmiko_tools.load_inventory` が返すデバイス辞書。
+                 各エントリは ``{host, device_type, username, password, port, ...}``。
+
+    Returns:
+        str: pyATS テストベッド YAML 文字列。
+    """
+    import yaml as _yaml
+
+    testbed_devices: dict = {}
+    for name, cfg in devices.items():
+        os_type = _device_type_to_pyats_os(cfg.get("device_type", "cisco_ios"))
+        testbed_devices[name] = {
+            "os": os_type,
+            "type": "router",
+            "credentials": {
+                "default": {
+                    "username": cfg["username"],
+                    "password": cfg["password"],
+                }
+            },
+            "connections": {
+                "default": {
+                    "class": "unicon.Unicon",
+                    "protocol": "ssh",
+                    "ip": cfg["host"],
+                    "port": int(cfg.get("port", 22)),
+                }
+            },
+        }
+
+    return _yaml.dump(
+        {"devices": testbed_devices},
+        default_flow_style=False,
+        allow_unicode=True,
+    )
 
 
 def run_show_command(testbed_yaml: str, device_name: str, command: str) -> dict:
@@ -692,3 +755,271 @@ def collect_device_state(testbed_yaml: str, device_name: str) -> dict:
             dev.disconnect()
         except Exception:  # noqa: BLE001
             pass
+
+
+# ---------------------------------------------------------------------------
+# Phase I: pyATS/Unicon を使った Live 操作関数
+# ---------------------------------------------------------------------------
+#
+# インベントリ YAML を読み込み、pyATS/Unicon で直接実機を操作する。
+# netmiko は使用しない。
+#
+# 必要条件: uv sync --extra network （pyats + genie のインストール）
+# ---------------------------------------------------------------------------
+
+
+import string as _string
+
+
+def _expand_env_vars(value: str) -> str:
+    """``${VAR_NAME}`` 形式の環境変数を展開する。
+
+    未定義変数は元のプレースホルダーのまま残す（safe_substitute）。
+    """
+    return _string.Template(value).safe_substitute(os.environ)
+
+
+def load_inventory(inventory_path: str) -> dict[str, dict]:
+    """インベントリ YAML ファイルを読み込みデバイス辞書を返す。
+
+    各フィールド値に含まれる ``${VAR_NAME}`` 形式のプレースホルダーは、
+    実行時の環境変数（.env 含む）で展開される。
+
+    Args:
+        inventory_path: インベントリ YAML ファイルのパス（絶対 or 相対）。
+
+    Returns:
+        ``{device_name: {host, device_type, username, password, port, apply_mode, ...}}``
+
+    Raises:
+        FileNotFoundError: ファイルが存在しない場合。
+        ValueError: YAML の形式が不正な場合。
+    """
+    from pathlib import Path
+    import yaml as _yaml
+
+    path = Path(inventory_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"インベントリファイルが見つかりません: {inventory_path}\n"
+            "inventory/<プロンプトセット名>.yaml を作成してください。"
+        )
+
+    raw = path.read_text(encoding="utf-8")
+    data = _yaml.safe_load(raw)
+
+    if not isinstance(data, dict) or "devices" not in data:
+        raise ValueError(
+            f"インベントリファイルの形式が不正です: {inventory_path}\n"
+            "'devices:' キーが必要です。"
+        )
+
+    devices: dict[str, dict] = {}
+    for name, cfg in data["devices"].items():
+        if not isinstance(cfg, dict):
+            raise ValueError(
+                f"デバイス '{name}' の設定が辞書形式ではありません: {inventory_path}"
+            )
+        expanded = {
+            k: (_expand_env_vars(str(v)) if isinstance(v, str) else v)
+            for k, v in cfg.items()
+        }
+        for required in ("host", "device_type", "username", "password"):
+            if not expanded.get(required):
+                raise ValueError(
+                    f"デバイス '{name}' に必須キー '{required}' がありません: {inventory_path}"
+                )
+        expanded.setdefault("apply_mode", "config_merge")
+        expanded.setdefault("port", 22)
+        devices[name] = expanded
+
+    return devices
+
+
+def _compute_config_diff(current: str, target: str) -> list[str]:
+    """incremental モード用: target にあって current にない行を返す。"""
+    current_stripped = {line.strip() for line in current.splitlines() if line.strip()}
+    return [
+        line for line in target.splitlines()
+        if line.strip() and line.strip() not in current_stripped
+    ]
+
+
+def check_connectivity(devices: dict[str, dict]) -> dict[str, bool]:
+    """各デバイスへの SSH 疎通確認（pyATS/Unicon）。
+
+    各デバイスに対して Unicon で接続を試み、すぐに切断する。
+
+    Args:
+        devices: :func:`load_inventory` が返すデバイス辞書。
+
+    Returns:
+        ``{device_name: True/False}``
+    """
+    results: dict[str, bool] = {}
+
+    for name, cfg in devices.items():
+        testbed_yaml = build_testbed_from_inventory({name: cfg})
+        try:
+            testbed = _load_testbed(testbed_yaml)
+            dev = testbed.devices[name]
+            dev.connect(log_stdout=False, learn_hostname=True)
+            dev.disconnect()
+            results[name] = True
+        except ImportError:
+            raise
+        except Exception:  # noqa: BLE001
+            results[name] = False
+
+    return results
+
+
+def backup_running_config(devices: dict[str, dict]) -> dict[str, str]:
+    """各デバイスの running-config をバックアップして返す（pyATS/Unicon）。
+
+    Args:
+        devices: :func:`load_inventory` が返すデバイス辞書。
+
+    Returns:
+        ``{device_name: running_config_text}``
+
+    Raises:
+        RuntimeError: いずれかのデバイスでバックアップに失敗した場合。
+    """
+    backups: dict[str, str] = {}
+    failures: list[str] = []
+
+    for name, cfg in devices.items():
+        testbed_yaml = build_testbed_from_inventory({name: cfg})
+        try:
+            testbed = _load_testbed(testbed_yaml)
+            dev = _connect_device(testbed, name)
+            try:
+                output = dev.execute("show running-config")
+                backups[name] = output
+            finally:
+                try:
+                    dev.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+        except ImportError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"  {name} ({cfg.get('host', '?')}): {exc}")
+
+    if failures:
+        raise RuntimeError(
+            "running-config のバックアップに失敗したデバイスがあります:\n"
+            + "\n".join(failures)
+        )
+
+    return backups
+
+
+def apply_config(device_name: str, cfg: dict, config_text: str) -> dict:
+    """1 台のデバイスにコンフィグを投入する（pyATS/Unicon）。
+
+    ``apply_mode`` に応じて投入方式を切り替える:
+
+    * ``config_merge``   — ``device.configure()`` で行単位に追記（非破壊・デフォルト）。
+    * ``config_replace`` — 同上（将来的に ``configure replace`` に拡張可能）。
+    * ``incremental``    — 差分行のみ投入（最小変更）。
+
+    Args:
+        device_name: デバイス名（ログ・戻り値用）。
+        cfg:         :func:`load_inventory` の 1 エントリ。
+        config_text: 投入するコンフィグテキスト。
+
+    Returns:
+        ``{"device": str, "success": bool, "output": str, "error": str}``
+    """
+    apply_mode = cfg.get("apply_mode", "config_merge")
+    testbed_yaml = build_testbed_from_inventory({device_name: cfg})
+
+    try:
+        testbed = _load_testbed(testbed_yaml)
+        dev = _connect_device(testbed, device_name)
+        try:
+            if apply_mode == "incremental":
+                current = dev.execute("show running-config")
+                diff_lines = _compute_config_diff(current, config_text)
+                if diff_lines:
+                    output = dev.configure("\n".join(diff_lines))
+                else:
+                    output = "(変更なし — 差分なし)"
+            else:
+                lines = [ln for ln in config_text.splitlines() if ln.strip()]
+                output = dev.configure("\n".join(lines))
+        finally:
+            try:
+                dev.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+        return {"device": device_name, "success": True, "output": output, "error": ""}
+
+    except ImportError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        return {"device": device_name, "success": False, "output": "", "error": str(exc)}
+
+
+def rollback_config(device_name: str, cfg: dict, backup_config: str) -> dict:
+    """バックアップコンフィグを使ってデバイスをロールバックする（pyATS/Unicon）。
+
+    Args:
+        device_name:   デバイス名（ログ・戻り値用）。
+        cfg:           :func:`load_inventory` の 1 エントリ。
+        backup_config: :func:`backup_running_config` で取得したバックアップテキスト。
+
+    Returns:
+        ``{"device": str, "success": bool, "output": str, "error": str}``
+    """
+    testbed_yaml = build_testbed_from_inventory({device_name: cfg})
+
+    try:
+        testbed = _load_testbed(testbed_yaml)
+        dev = _connect_device(testbed, device_name)
+        try:
+            lines = [ln for ln in backup_config.splitlines() if ln.strip()]
+            output = dev.configure("\n".join(lines))
+        finally:
+            try:
+                dev.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+        return {"device": device_name, "success": True, "output": output, "error": ""}
+
+    except ImportError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        return {"device": device_name, "success": False, "output": "", "error": str(exc)}
+
+    """各デバイスへの SSH 疎通確認（pyATS/Unicon バックエンド）。
+
+    各デバイスに対して Unicon で接続を試み、すぐに切断する。
+    タイムアウト / 認証エラーなど例外が発生した場合は ``False`` を返す。
+
+    Args:
+        devices: :func:`~agentic_ni.tools.netmiko_tools.load_inventory` が返す辞書。
+
+    Returns:
+        ``{device_name: True/False}``
+    """
+    results: dict[str, bool] = {}
+
+    for name, cfg in devices.items():
+        testbed_yaml = build_testbed_from_inventory({name: cfg})
+        try:
+            testbed = _load_testbed(testbed_yaml)
+            dev = testbed.devices[name]
+            dev.connect(log_stdout=False, learn_hostname=True)
+            dev.disconnect()
+            results[name] = True
+        except ImportError:
+            raise  # pyATS 未インストールを呼び出し元に通知
+        except Exception:  # noqa: BLE001
+            results[name] = False
+
+    return results

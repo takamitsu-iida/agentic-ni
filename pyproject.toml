@@ -28,6 +28,10 @@ rag = [
     "chromadb>=0.5",
     "pysqlite3-binary>=0.5",
 ]
+live = [
+    # netmiko は不要。pyATS/Unicon で実機へ直接接続する。
+    # 必要条件: uv sync --extra network
+]
 all = [
     "pyats>=24.0",
     "genie>=24.0",

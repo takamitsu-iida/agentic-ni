@@ -35,6 +35,29 @@ class TroubleshootFixRecord(TypedDict):
     description: str           # この修正の目的説明
 
 
+class LiveApplyRecord(TypedDict):
+    """Phase I: 実機適用モードにおける 1 デバイス分の適用記録。"""
+
+    device: str            # CML ノード名（インベントリのキー）
+    host: str              # 実機の管理 IP アドレス
+    apply_mode: str        # "config_merge" / "config_replace" / "incremental"
+
+    # precheck 段階
+    connectivity_ok: bool  # SSH 疎通確認結果
+    backup_config: str     # バックアップ取得済み running-config（取得失敗時は空文字）
+    backup_lines: int      # バックアップ行数（表示用）
+
+    # apply 段階（live_apply_node 実行後に設定）
+    applied_config: str    # 実際に投入したコンフィグテキスト
+    apply_success: bool    # 投入成功フラグ
+    apply_output: str      # 投入コマンドの出力
+    apply_error: str       # 投入失敗時のエラーメッセージ（成功時は空文字）
+
+    # rollback 段階（失敗時に自動実行）
+    rollback_done: bool    # ロールバック実施済みフラグ
+    rollback_error: str    # ロールバック失敗時のエラーメッセージ（成功・未実施は空文字）
+
+
 class AgentState(TypedDict):
     """グラフ全体で共有されるステート。"""
 
@@ -119,6 +142,28 @@ class AgentState(TypedDict):
 
     analysis_result: str
     """--analyze または --improve で生成された分析・改善計画のテキスト（Markdown）。"""
+
+    # --- Phase I: 実機適用モード ---
+    live_inventory_path: str
+    """--apply-to-live で使用するインベントリ YAML のパス。
+    省略時は inventory/<prompt_set>.yaml を自動使用する。"""
+
+
+    live_apply_records: list[LiveApplyRecord]
+    """precheck / apply / rollback の各フェーズで更新されるデバイスごとの記録リスト。"""
+
+    live_verify_enabled: bool
+    """True の場合、実機適用後に pyATS で同一テスト計画を実行する（--live-verify）。"""
+
+    live_human_decision: str
+    """human_confirm_live_node での Human の決定。
+    "yes" = 承認 / "no" = 取り消し / "rollback-only" = ロールバックのみ / "" = 未決定。"""
+
+    live_test_results: list[TestResult]
+    """live_verify_node が実機に対して実行したテスト結果（--live-verify 時のみ設定）。"""
+
+    live_report: str
+    """実機適用完了時の詳細レポート（Markdown）。final_report に追記される。"""
 
     # --- 最終出力 ---
     final_report: str

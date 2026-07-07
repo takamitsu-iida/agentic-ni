@@ -5,6 +5,7 @@ Phase 7: Human-in-the-Loop、レポートフォーマット整備、E2E統合済
 Phase D: 設計ドキュメント自動生成（IP台帳・ルーティング設計書・コンフィグ保存）対応済み。
 Phase H: トラブルシューティングモード（既存ラボへのインクリメンタル修正）対応済み。
 Phase E: 設計分析（--analyze）・改善計画生成（--improve）対応済み。
+Phase I Step 2: 実機適用 live_precheck_node 対応済み。
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
 from agentic_ni.agents import architect, analyzer, fault_simulator, troubleshooter, validator
-from agentic_ni.state import AgentState, FaultScenarioResult
+from agentic_ni.state import AgentState, FaultScenarioResult, LiveApplyRecord
 
 load_dotenv()
 
@@ -879,6 +880,13 @@ def initial_state_troubleshoot(
         troubleshoot_report="",
         analyze_request="",
         analysis_result="",
+        # Phase I
+        live_inventory_path="",
+        live_apply_records=[],
+        live_verify_enabled=False,
+        live_human_decision="",
+        live_test_results=[],
+        live_report="",
         final_report="",
     )
 
@@ -944,6 +952,13 @@ def initial_state(
         troubleshoot_report="",
         analyze_request="",
         analysis_result="",
+        # Phase I
+        live_inventory_path="",
+        live_apply_records=[],
+        live_verify_enabled=False,
+        live_human_decision="",
+        live_test_results=[],
+        live_report="",
         final_report="",
     )
 
@@ -986,6 +1001,13 @@ def initial_state_analyze(
         troubleshoot_report="",
         analyze_request="",
         analysis_result="",
+        # Phase I
+        live_inventory_path="",
+        live_apply_records=[],
+        live_verify_enabled=False,
+        live_human_decision="",
+        live_test_results=[],
+        live_report="",
         final_report="",
     )
 
@@ -1030,6 +1052,13 @@ def initial_state_improve(
         troubleshoot_report="",
         analyze_request=analyze_request,
         analysis_result="",
+        # Phase I
+        live_inventory_path="",
+        live_apply_records=[],
+        live_verify_enabled=False,
+        live_human_decision="",
+        live_test_results=[],
+        live_report="",
         final_report="",
     )
 
@@ -1045,6 +1074,1046 @@ def load_requirement(prompt_set: str) -> str:
             f"ファイルを作成して要件テキストを記載してください。"
         )
     return path.read_text(encoding="utf-8").strip()
+
+
+# ---------------------------------------------------------------------------
+# Phase I: 実機適用ノード
+# ---------------------------------------------------------------------------
+
+
+def _get_live_tools(state: AgentState = None):
+    """Live ツールモジュールを返す（pyATS/Unicon バックエンド固定）。"""
+    from agentic_ni.tools import pyats_tools
+    return pyats_tools
+
+
+
+def _resolve_inventory_path(state: AgentState) -> str:
+    """インベントリパスを解決する。
+
+    ``live_inventory_path`` が設定されている場合はそれを使用し、
+    省略時は ``inventory/<prompt_set>.yaml`` を自動使用する。
+
+    Raises:
+        FileNotFoundError: インベントリファイルが存在しない場合。
+    """
+    explicit = state.get("live_inventory_path", "")
+    if explicit:
+        return explicit
+    prompt_set = state.get("prompt_set", "demo")
+    default_path = Path("inventory") / f"{prompt_set}.yaml"
+    if not default_path.exists():
+        raise FileNotFoundError(
+            f"インベントリファイルが見つかりません: {default_path}\n"
+            f"inventory/{prompt_set}.yaml を作成するか --inventory で明示指定してください。"
+        )
+    return str(default_path)
+
+
+def live_precheck_node(state: AgentState) -> dict:
+    """Phase I Step 2: インベントリ読込・SSH 疎通確認・running-config バックアップを実行する。
+
+    多段安全機構:
+        Level 1 — インベントリファイルの存在チェック
+        Level 2 — SSH 疎通確認（繋がらないデバイスがあれば中断）
+        Level 3 — バックアップ取得の成否確認（失敗すれば中断）
+
+    state 更新キー:
+        live_apply_records  — デバイスごとの precheck 結果リスト
+        error_log           — 中断理由（成功時は空文字）
+        final_report        — 中断時のエラーレポート
+
+    Raises:
+        この関数は例外を送出しない。失敗時は error_log と final_report を更新して
+        グラフの後続ノードへ制御を渡す（後続で error_log を見て分岐する）。
+    """
+    from agentic_ni.tools import pyats_tools
+
+    print(f"\n{'='*60}", flush=True)
+    print("[Phase I] 実機適用プレチェック 開始", flush=True)
+    print(f"{'='*60}", flush=True)
+
+    tools = _get_live_tools(state)
+    # ------------------------------------------------------------------
+    # Level 1: インベントリファイルの存在チェック
+    # ------------------------------------------------------------------
+    try:
+        inventory_path = _resolve_inventory_path(state)
+        devices = pyats_tools.load_inventory(inventory_path)
+        print(f"  [✅ Level 1] インベントリ読み込み完了: {inventory_path} ({len(devices)} デバイス)", flush=True)
+    except (FileNotFoundError, ValueError) as exc:
+        msg = f"インベントリ読み込みエラー: {exc}"
+        print(f"  [❌ Level 1] {msg}", flush=True)
+        return {
+            "error_log": msg,
+            "live_apply_records": [],
+            "final_report": f"# Phase I プレチェック失敗\n\n{msg}",
+        }
+
+    # ------------------------------------------------------------------
+    # Level 2: SSH 疎通確認
+    # ------------------------------------------------------------------
+    print(f"  [Level 2] SSH 疎通確認中...", flush=True)
+    connectivity = tools.check_connectivity(devices)
+    failed_conn = [name for name, ok in connectivity.items() if not ok]
+
+    for name, ok in connectivity.items():
+        host = devices[name].get("host", "?")
+        mark = "✅" if ok else "❌"
+        print(f"    {mark} {name} ({host})", flush=True)
+
+    if failed_conn:
+        msg = f"SSH 疎通確認に失敗したデバイス: {', '.join(failed_conn)}"
+        print(f"  [❌ Level 2] {msg}", flush=True)
+        # 失敗デバイスだけ記録して中断
+        records: list[LiveApplyRecord] = [
+            LiveApplyRecord(
+                device=name,
+                host=devices[name].get("host", ""),
+                apply_mode=devices[name].get("apply_mode", "config_merge"),
+                connectivity_ok=connectivity.get(name, False),
+                backup_config="",
+                backup_lines=0,
+                applied_config="",
+                apply_success=False,
+                apply_output="",
+                apply_error="",
+                rollback_done=False,
+                rollback_error="",
+            )
+            for name in devices
+        ]
+        return {
+            "error_log": msg,
+            "live_apply_records": records,
+            "final_report": f"# Phase I プレチェック失敗\n\n{msg}",
+        }
+    print(f"  [✅ Level 2] 全 {len(devices)} デバイスの SSH 疎通確認 OK", flush=True)
+
+    # ------------------------------------------------------------------
+    # Level 3: running-config バックアップ取得
+    # ------------------------------------------------------------------
+    print(f"  [Level 3] running-config バックアップ取得中...", flush=True)
+    try:
+        backups = tools.backup_running_config(devices)
+        print(f"  [✅ Level 3] バックアップ取得完了", flush=True)
+        for name, cfg in backups.items():
+            lines = len([l for l in cfg.splitlines() if l.strip()])
+            print(f"    ✅ {name} — {lines} 行", flush=True)
+    except RuntimeError as exc:
+        msg = str(exc)
+        print(f"  [❌ Level 3] {msg}", flush=True)
+        records = [
+            LiveApplyRecord(
+                device=name,
+                host=devices[name].get("host", ""),
+                apply_mode=devices[name].get("apply_mode", "config_merge"),
+                connectivity_ok=True,
+                backup_config="",
+                backup_lines=0,
+                applied_config="",
+                apply_success=False,
+                apply_output="",
+                apply_error="",
+                rollback_done=False,
+                rollback_error="",
+            )
+            for name in devices
+        ]
+        return {
+            "error_log": msg,
+            "live_apply_records": records,
+            "final_report": f"# Phase I プレチェック失敗\n\n{msg}",
+        }
+
+    # ------------------------------------------------------------------
+    # 成功: live_apply_records を組み立てて返す
+    # ------------------------------------------------------------------
+    records = [
+        LiveApplyRecord(
+            device=name,
+            host=devices[name].get("host", ""),
+            apply_mode=devices[name].get("apply_mode", "config_merge"),
+            connectivity_ok=True,
+            backup_config=backups.get(name, ""),
+            backup_lines=len([
+                l for l in backups.get(name, "").splitlines() if l.strip()
+            ]),
+            applied_config="",
+            apply_success=False,
+            apply_output="",
+            apply_error="",
+            rollback_done=False,
+            rollback_error="",
+        )
+        for name in devices
+    ]
+
+    print(f"\n  [Phase I] プレチェック完了 — {len(records)} デバイス準備 OK", flush=True)
+    return {
+        "live_apply_records": records,
+        "error_log": "",
+    }
+
+
+def _should_continue_after_precheck(
+    state: AgentState,
+) -> Literal["confirm", "abort"]:
+    """プレチェック後の分岐: エラーがあれば abort、なければ confirm へ。"""
+    if state.get("error_log"):
+        return "abort"
+    return "confirm"
+
+
+def _build_confirmation_message(state: AgentState) -> str:
+    """Human 確認画面のメッセージ文字列を組み立てる。"""
+    records: list[LiveApplyRecord] = state.get("live_apply_records", [])
+    test_results: list = state.get("test_results", [])
+
+    lines = [
+        "⚠️  実機へのコンフィグ適用を開始しようとしています",
+        "",
+        "【適用対象】",
+    ]
+    for rec in records:
+        mark = "✅" if rec.get("connectivity_ok") else "❌"
+        backup_lines = rec.get("backup_lines", 0)
+        lines.append(
+            f"  {mark} {rec['device']} ({rec['host']})"
+            f" — {rec['apply_mode']}"
+            f" — バックアップ取得済み ({backup_lines} 行)"
+        )
+
+    if test_results:
+        lines.append("")
+        lines.append("【CML テスト結果（検証済み）】")
+        parts = []
+        for r in test_results:
+            mark = "✅" if r["result"] == "PASS" else "❌"
+            parts.append(f"{mark} {r['test']}: {r['result']}")
+        lines.append("  " + "  ".join(parts))
+
+    lines.append("")
+    lines.append("続行しますか？ (yes / no / rollback-only)")
+    return "\n".join(lines)
+
+
+def human_confirm_live_node(state: AgentState) -> dict:
+    """Phase I Step 3: Human による最終承認ノード（スキップ不可）。
+
+    LangGraph の :func:`interrupt` を使用してグラフを一時停止し、Human の
+    入力を待つ。承認なしには先へ進まない。
+
+    **interrupt に渡すペイロード**::
+
+        {
+            "type": "live_confirm",
+            "message": <確認画面テキスト>,
+            "live_apply_records": [...],
+            "test_results": [...],
+        }
+
+    **再開時に受け取るペイロード**::
+
+        {
+            "decision": "yes" | "no" | "rollback-only",
+            "reason": "<任意のコメント>",
+        }
+
+    **state 更新キー**:
+
+    * ``live_human_decision`` — "yes" / "no" / "rollback-only"
+    * ``final_report`` — "no" / "rollback-only" 時は対応メッセージを追記
+    """
+    confirmation_msg = _build_confirmation_message(state)
+
+    print(f"\n{'='*60}", flush=True)
+    print("[Phase I] Human 承認待ち...", flush=True)
+    print(f"{'='*60}", flush=True)
+    print(confirmation_msg, flush=True)
+
+    decision_payload: dict = interrupt(
+        {
+            "type": "live_confirm",
+            "message": confirmation_msg,
+            "live_apply_records": state.get("live_apply_records", []),
+            "test_results": state.get("test_results", []),
+        }
+    )
+
+    raw_decision: str = str(decision_payload.get("decision", "no")).strip().lower()
+    reason: str = str(decision_payload.get("reason", ""))
+
+    # 正規化: "yes" / "rollback-only" 以外はすべて "no" として扱う
+    if raw_decision == "yes":
+        decision = "yes"
+    elif raw_decision in ("rollback-only", "rollback_only", "rollback"):
+        decision = "rollback-only"
+    else:
+        decision = "no"
+
+    print(f"\n  Human の決定: {decision}", flush=True)
+
+    updates: dict = {"live_human_decision": decision}
+
+    if decision == "no":
+        cancel_section = (
+            "\n\n---\n\n"
+            "## ⚠️ 実機適用 — Human による取り消し\n\n"
+            f"取り消し理由: {reason or '(理由なし)'}\n\n"
+            "実機への設定投入は行われませんでした。  \n"
+            "取得済みバックアップは `live_apply_records` に保持されています。"
+        )
+        updates["final_report"] = state.get("final_report", "") + cancel_section
+
+    elif decision == "rollback-only":
+        rollback_section = (
+            "\n\n---\n\n"
+            "## ⏪ 実機適用 — rollback-only モード\n\n"
+            f"理由: {reason or '(理由なし)'}\n\n"
+            "新規コンフィグの投入はスキップします。  \n"
+            "取得済みバックアップを使ってロールバックを実施します。"
+        )
+        updates["final_report"] = state.get("final_report", "") + rollback_section
+
+    return updates
+
+
+def _should_continue_after_confirm(
+    state: AgentState,
+) -> Literal["apply", "cancelled", "rollback"]:
+    """human_confirm_live_node 後のルーティングを決定する。
+
+    * ``yes``           → ``apply``     （live_apply_node、Step 4 以降）
+    * ``rollback-only`` → ``rollback``  （live_rollback_node、Step 4 以降）
+    * ``no`` / その他   → ``cancelled`` （処理終了）
+    """
+    decision = state.get("live_human_decision", "no")
+    if decision == "yes":
+        return "apply"
+    elif decision == "rollback-only":
+        return "rollback"
+    return "cancelled"
+
+
+def compile_graph_live_precheck_confirm():
+    """Phase I Step 3: precheck → human_confirm までを実行するグラフ（テスト用）。
+
+    フロー::
+
+        live_precheck
+            ↓ confirm (precheck 成功)
+        human_confirm
+            ↓ yes        → END  (Step 4 で live_apply_node に差し替え)
+            ↓ cancelled  → END  (final_report に取り消しメッセージ追記済み)
+            ↓ rollback   → END  (Step 4+ で rollback_node に差し替え)
+            ↓
+        abort (precheck 失敗)
+            → END
+
+    ``interrupt()`` を使用するため :class:`MemorySaver` チェックポインターが必須。
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+
+    graph = StateGraph(AgentState)
+    graph.add_node("live_precheck", live_precheck_node)
+    graph.add_node("human_confirm", human_confirm_live_node)
+
+    graph.set_entry_point("live_precheck")
+
+    graph.add_conditional_edges(
+        "live_precheck",
+        _should_continue_after_precheck,
+        {
+            "confirm": "human_confirm",
+            "abort": END,
+        },
+    )
+
+    # Step 4 実装前の暫定ルーティング: すべて END へ
+    graph.add_conditional_edges(
+        "human_confirm",
+        _should_continue_after_confirm,
+        {
+            "apply": END,
+            "cancelled": END,
+            "rollback": END,
+        },
+    )
+
+    return graph.compile(checkpointer=MemorySaver())
+
+
+# ---------------------------------------------------------------------------
+# Phase I Step 4: コンフィグ投入ノード・ロールバックノード
+# ---------------------------------------------------------------------------
+
+
+def live_apply_node(state: AgentState) -> dict:
+    """Phase I Step 4: Netmiko で各デバイスにコンフィグを投入する。
+
+    CML で検証済みの ``device_configs`` を実機に投入する。
+    投入に失敗したデバイスは ``backup_config`` を使って自動ロールバックする
+    （多段安全機構 Level 6）。
+
+    **処理フロー**:
+
+    1. インベントリを再読み込みして接続パラメータを取得
+    2. 各デバイスに対して :func:`~agentic_ni.tools.pyats_tools.apply_config` を実行
+    3. 失敗したデバイスに対して :func:`~agentic_ni.tools.pyats_tools.rollback_config` を実行
+    4. ``live_apply_records`` を更新して返す
+
+    **state 更新キー**:
+
+    * ``live_apply_records`` — apply / rollback 結果を各レコードに追記
+    * ``error_log``          — 1 台以上失敗した場合にエラーメッセージを設定
+    """
+    from agentic_ni.tools import pyats_tools
+
+    records: list[LiveApplyRecord] = list(state.get("live_apply_records", []))
+    device_configs: dict[str, str] = state.get("device_configs", {})
+
+    print(f"\n{'='*60}", flush=True)
+    print("[Phase I] 実機コンフィグ投入 開始", flush=True)
+    print(f"{'='*60}", flush=True)
+
+    tools = _get_live_tools(state)
+    # インベントリを再読み込みして接続パラメータを取得
+    try:
+        inventory_path = _resolve_inventory_path(state)
+        devices = pyats_tools.load_inventory(inventory_path)
+    except (FileNotFoundError, ValueError) as exc:
+        msg = f"インベントリ読み込みエラー（apply フェーズ）: {exc}"
+        print(f"  [❌] {msg}", flush=True)
+        return {"error_log": msg}
+
+    updated_records: list[LiveApplyRecord] = []
+    failed_devices: list[str] = []
+
+    for rec in records:
+        name = rec["device"]
+        cfg = devices.get(name)
+        if cfg is None:
+            # インベントリにないデバイスはスキップ（エラーにしない）
+            print(f"  ⚠️  {name}: インベントリに見つからないためスキップ", flush=True)
+            updated_records.append(rec)
+            continue
+
+        config_text = device_configs.get(name, "")
+        if not config_text.strip():
+            print(f"  ⚠️  {name}: コンフィグが空のためスキップ", flush=True)
+            updated_records.append(rec)
+            continue
+
+        print(f"  [{name}] コンフィグ投入中 ({cfg['host']}, {cfg.get('apply_mode', 'config_merge')})...", flush=True)
+        apply_result = tools.apply_config(name, cfg, config_text)
+
+        updated_rec: LiveApplyRecord = {
+            **rec,
+            "applied_config": config_text,
+            "apply_success": apply_result["success"],
+            "apply_output": apply_result["output"],
+            "apply_error": apply_result["error"],
+            "rollback_done": False,
+            "rollback_error": "",
+        }
+
+        if apply_result["success"]:
+            print(f"    ✅ {name}: 投入成功", flush=True)
+        else:
+            print(f"    ❌ {name}: 投入失敗 — {apply_result['error']}", flush=True)
+            failed_devices.append(name)
+
+            # Level 6: 自動ロールバック
+            backup = rec.get("backup_config", "")
+            if backup.strip():
+                print(f"    ⏪ {name}: バックアップを使って自動ロールバック中...", flush=True)
+                rb_result = tools.rollback_config(name, cfg, backup)
+                updated_rec["rollback_done"] = rb_result["success"]
+                updated_rec["rollback_error"] = rb_result["error"]
+                mark = "✅" if rb_result["success"] else "❌"
+                print(f"    {mark} {name}: ロールバック {'成功' if rb_result['success'] else '失敗'}", flush=True)
+            else:
+                print(f"    ⚠️  {name}: バックアップなし — ロールバックをスキップ", flush=True)
+
+        updated_records.append(updated_rec)
+
+    error_log = ""
+    if failed_devices:
+        error_log = (
+            f"実機適用に失敗したデバイス: {', '.join(failed_devices)}\n"
+            "自動ロールバックを実施しました。"
+        )
+
+    total = len([r for r in updated_records if r.get("applied_config")])
+    succeeded = len([r for r in updated_records if r.get("apply_success")])
+    print(f"\n  [Phase I] 投入完了 — {succeeded}/{total} デバイス成功", flush=True)
+
+    return {
+        "live_apply_records": updated_records,
+        "error_log": error_log,
+    }
+
+
+def live_rollback_node(state: AgentState) -> dict:
+    """Phase I Step 4: rollback-only モード — バックアップコンフィグを実機に復元する。
+
+    ``human_confirm_live_node`` で ``"rollback-only"`` が選択された場合に実行される。
+    新規コンフィグの投入は行わず、取得済みバックアップを使って各デバイスを元の状態に戻す。
+
+    **state 更新キー**:
+
+    * ``live_apply_records`` — rollback 結果を各レコードに追記
+    * ``error_log``          — 1 台以上失敗した場合にエラーメッセージを設定
+    """
+    from agentic_ni.tools import pyats_tools
+
+    records: list[LiveApplyRecord] = list(state.get("live_apply_records", []))
+
+    print(f"\n{'='*60}", flush=True)
+    print("[Phase I] rollback-only モード — バックアップを復元中", flush=True)
+    print(f"{'='*60}", flush=True)
+
+    tools = _get_live_tools(state)
+    try:
+        inventory_path = _resolve_inventory_path(state)
+        devices = pyats_tools.load_inventory(inventory_path)
+    except (FileNotFoundError, ValueError) as exc:
+        msg = f"インベントリ読み込みエラー（rollback フェーズ）: {exc}"
+        print(f"  [❌] {msg}", flush=True)
+        return {"error_log": msg}
+
+    updated_records: list[LiveApplyRecord] = []
+    failed_rollbacks: list[str] = []
+
+    for rec in records:
+        name = rec["device"]
+        cfg = devices.get(name)
+        if cfg is None:
+            print(f"  ⚠️  {name}: インベントリに見つからないためスキップ", flush=True)
+            updated_records.append(rec)
+            continue
+
+        backup = rec.get("backup_config", "")
+        if not backup.strip():
+            print(f"  ⚠️  {name}: バックアップなし — スキップ", flush=True)
+            updated_records.append(rec)
+            continue
+
+        print(f"  [{name}] バックアップを復元中 ({cfg['host']})...", flush=True)
+        rb_result = tools.rollback_config(name, cfg, backup)
+
+        updated_rec: LiveApplyRecord = {
+            **rec,
+            "rollback_done": rb_result["success"],
+            "rollback_error": rb_result["error"],
+        }
+        updated_records.append(updated_rec)
+
+        mark = "✅" if rb_result["success"] else "❌"
+        print(f"    {mark} {name}: ロールバック {'成功' if rb_result['success'] else '失敗 — ' + rb_result['error']}", flush=True)
+        if not rb_result["success"]:
+            failed_rollbacks.append(name)
+
+    error_log = ""
+    if failed_rollbacks:
+        error_log = f"ロールバックに失敗したデバイス: {', '.join(failed_rollbacks)}"
+
+    done = len([r for r in updated_records if r.get("rollback_done")])
+    print(f"\n  [Phase I] ロールバック完了 — {done}/{len(records)} デバイス成功", flush=True)
+
+    return {
+        "live_apply_records": updated_records,
+        "error_log": error_log,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase I Step 6: 実機 pyATS 検証ノード（任意）
+# ---------------------------------------------------------------------------
+
+
+def _should_verify_after_apply(
+    state: AgentState,
+) -> Literal["verify", "report"]:
+    """``live_apply_node`` 後のルーティングを決定する。
+
+    ``live_verify_enabled=True`` かつ ``live_human_decision="yes"`` の場合のみ
+    ``live_verify_node`` へ進む。それ以外は直接 ``live_report_node`` へ。
+    """
+    if (
+        state.get("live_verify_enabled")
+        and state.get("live_human_decision") == "yes"
+    ):
+        return "verify"
+    return "report"
+
+
+def live_verify_node(state: AgentState) -> dict:
+    """Phase I Step 6: 実機に対して pyATS で同一テスト計画を実行する（任意）。
+
+    CML 検証で使用した ``test_plan_items`` を実機に対して再実行する。
+    ``--live-verify`` フラグが指定された場合のみ実行される。
+
+    実機向け testbed YAML はインベントリから生成する
+    (:func:`~agentic_ni.tools.pyats_tools.build_testbed_from_inventory`)。
+    pyATS/Genie が未インストールの場合はエラーを記録してスキップする。
+
+    **state 更新キー**:
+
+    * ``live_test_results`` — 実機テスト結果リスト（:class:`~agentic_ni.state.TestResult`）
+    """
+    from agentic_ni.tools import pyats_tools
+    from agentic_ni.agents.validator import TestItem, _execute_test
+
+    print(f"\n{'='*60}", flush=True)
+    print("[Phase I] 実機 pyATS 検証 開始", flush=True)
+    print(f"{'='*60}", flush=True)
+
+    test_plan_items: list[dict] = state.get("test_plan_items", [])
+    if not test_plan_items:
+        print("  ⚠️  テスト計画がありません（test_plan_items が空）—スキップ", flush=True)
+        return {"live_test_results": []}
+
+    # インベントリを読み込んで実機向け testbed YAML を生成
+    try:
+        inventory_path = _resolve_inventory_path(state)
+        devices = pyats_tools.load_inventory(inventory_path)
+        testbed_yaml = pyats_tools.build_testbed_from_inventory(devices)
+    except (FileNotFoundError, ValueError) as exc:
+        msg = f"インベントリ読み込みエラー（verify フェーズ）: {exc}"
+        print(f"  [❌] {msg}", flush=True)
+        return {
+            "live_test_results": [
+                {"test": "live_verify_setup", "result": "FAIL", "detail": msg}
+            ]
+        }
+
+    # テスト計画を復元して実行
+    test_items: list[TestItem] = []
+    for item_dict in test_plan_items:
+        try:
+            test_items.append(TestItem(**item_dict))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ⚠️  TestItem の復元に失敗: {exc}", flush=True)
+
+    print(f"  テスト計画: {len(test_items)} 件 [実機]", flush=True)
+    live_test_results: list = []
+
+    for i, item in enumerate(test_items, 1):
+        print(f"  ({i}/{len(test_items)}) {item.description} [実機]", flush=True)
+        try:
+            result = _execute_test(item, testbed_yaml)
+        except ImportError:
+            result = {
+                "test": item.description,
+                "result": "FAIL",
+                "detail": "pyATS/Genie が未インストールです。uv sync --extra network を実行してください。",
+            }
+        mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
+        print(f"       → {mark}  {result['detail']}", flush=True)
+        live_test_results.append(result)
+
+    passed = sum(1 for r in live_test_results if r["result"] == "PASS")
+    print(
+        f"\n  [Phase I] 実機検証完了 — {passed}/{len(live_test_results)} テスト PASS",
+        flush=True,
+    )
+
+    return {"live_test_results": live_test_results}
+
+
+def live_report_node(state: AgentState) -> dict:
+    """Phase I Step 5: 実機適用結果レポートを生成し ``final_report`` に追記する。
+
+    ``live_apply_node`` または ``live_rollback_node`` の直後に実行される。
+
+    **state 更新キー**:
+
+    * ``live_report``  — 実機適用の詳細レポート（Markdown）
+    * ``final_report`` — ``live_report`` を末尾に追記
+    """
+    records: list[LiveApplyRecord] = state.get("live_apply_records", [])
+    decision: str = state.get("live_human_decision", "yes")
+    is_rollback_only: bool = decision == "rollback-only"
+
+    print("\n  >>> 実機適用レポートを生成しています...", flush=True)
+
+    lines: list[str] = [
+        "",
+        "---",
+        "",
+        f"## 実機適用レポート（Phase I）"
+        + ("  — rollback-only モード" if is_rollback_only else ""),
+        "",
+        f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    ]
+
+    if is_rollback_only:
+        # ----------------------------------------------------------------
+        # rollback-only モードのレポート
+        # ----------------------------------------------------------------
+        lines.append("**操作**: バックアップへのロールバック")
+        lines += [
+            "",
+            "### ロールバック結果サマリー",
+            "",
+            "| デバイス | ホスト | ロールバック結果 |",
+            "|---|---|---|",
+        ]
+        for rec in records:
+            if not rec.get("backup_config", "").strip():
+                rb_mark = "⚠️ スキップ（バックアップなし）"
+            elif rec.get("rollback_done"):
+                rb_mark = "✅ 成功"
+            else:
+                rb_mark = "❌ 失敗"
+            lines.append(f"| {rec['device']} | {rec['host']} | {rb_mark} |")
+
+        skipped = [r for r in records if not r.get("backup_config", "").strip()]
+        failed_rb = [
+            r for r in records
+            if r.get("backup_config", "").strip() and not r.get("rollback_done")
+        ]
+        done_rb = [r for r in records if r.get("rollback_done")]
+
+        if failed_rb:
+            verdict = f"⚠️ {len(failed_rb)} 台のロールバックに失敗しました"
+        elif skipped:
+            verdict = (
+                f"✅ ロールバック完了"
+                f"（{len(skipped)} 台はバックアップなしのためスキップ）"
+            )
+        else:
+            verdict = f"✅ 全 {len(done_rb)} デバイスのロールバックが成功しました"
+
+        lines += ["", f"**判定**: {verdict}"]
+
+        if failed_rb:
+            lines += ["", "### 失敗詳細"]
+            for rec in failed_rb:
+                err = rec.get("rollback_error") or "不明なエラー"
+                lines.append(f"- **{rec['device']}** ({rec['host']}): `{err}`")
+
+    else:
+        # ----------------------------------------------------------------
+        # apply モードのレポート
+        # ----------------------------------------------------------------
+        modes = list({rec.get("apply_mode", "config_merge") for rec in records})
+        mode_str = modes[0] if len(modes) == 1 else "混在"
+        lines.append(f"**操作**: 新規コンフィグ投入 ({mode_str})")
+        lines += [
+            "",
+            "### 適用結果サマリー",
+            "",
+            "| デバイス | ホスト | モード | 適用結果 | ロールバック |",
+            "|---|---|---|---|---|",
+        ]
+        for rec in records:
+            if not rec.get("applied_config", "").strip():
+                apply_mark = "⏭️ スキップ"
+                rb_mark = "—"
+            elif rec.get("apply_success"):
+                apply_mark = "✅ 成功"
+                rb_mark = "—"
+            else:
+                apply_mark = "❌ 失敗"
+                if rec.get("rollback_done"):
+                    rb_mark = "✅ ロールバック成功"
+                elif rec.get("rollback_error"):
+                    rb_mark = "❌ ロールバック失敗"
+                else:
+                    rb_mark = "⚠️ ロールバック未実施"
+
+            lines.append(
+                f"| {rec['device']} | {rec['host']}"
+                f" | {rec.get('apply_mode', 'config_merge')}"
+                f" | {apply_mark} | {rb_mark} |"
+            )
+
+        applied = [r for r in records if r.get("applied_config", "").strip()]
+        succeeded = [r for r in applied if r.get("apply_success")]
+        failed_ap = [r for r in applied if not r.get("apply_success")]
+
+        if not applied:
+            verdict = "⚠️ 投入対象デバイスがありませんでした"
+        elif failed_ap:
+            rolled_back = [r for r in failed_ap if r.get("rollback_done")]
+            verdict = (
+                f"⚠️ {len(succeeded)} 台成功 / {len(failed_ap)} 台失敗"
+                + (
+                    f"（{len(rolled_back)} 台は自動ロールバック実施済み）"
+                    if rolled_back
+                    else ""
+                )
+            )
+        else:
+            verdict = f"✅ 全 {len(succeeded)} デバイスへの投入が成功しました"
+
+        lines += ["", f"**判定**: {verdict}"]
+
+        if failed_ap:
+            lines += ["", "### 失敗詳細"]
+            for rec in failed_ap:
+                lines.append(f"#### {rec['device']} ({rec['host']}) — ❌ 失敗")
+                lines.append(f"- エラー: `{rec.get('apply_error') or '不明'}`")
+                if rec.get("rollback_done"):
+                    backup_lines = rec.get("backup_lines", 0)
+                    lines.append(
+                        f"- ロールバック: ✅ 成功（バックアップ {backup_lines} 行を復元）"
+                    )
+                elif rec.get("rollback_error"):
+                    lines.append(
+                        f"- ロールバック: ❌ 失敗 — `{rec['rollback_error']}`"
+                    )
+                else:
+                    lines.append("- ロールバック: ⚠️ 未実施")
+
+    # ----------------------------------------------------------------
+    # 実機 pyATS 検証結果セクション（--live-verify 時のみ）
+    # ----------------------------------------------------------------
+    live_test_results: list = state.get("live_test_results", [])
+    if live_test_results:
+        lines += [
+            "",
+            "### 実機 pyATS 検証結果（--live-verify）",
+            "",
+            "| テスト名 | 結果 | 詳細 |",
+            "|---|---|---|",
+        ]
+        for r in live_test_results:
+            mark = "✅ PASS" if r["result"] == "PASS" else "❌ FAIL"
+            lines.append(f"| {r['test']} | {mark} | {r.get('detail', '')} |")
+
+        passed = sum(1 for r in live_test_results if r["result"] == "PASS")
+        failed = len(live_test_results) - passed
+        if failed == 0:
+            verify_verdict = f"✅ 実機検証: 全 {passed} テスト PASS"
+        else:
+            verify_verdict = f"⚠️ 実機検証: {passed} PASS / {failed} FAIL"
+        lines += ["", f"**実機検証判定**: {verify_verdict}"]
+
+    live_report = "\n".join(lines)
+
+    return {
+        "live_report": live_report,
+        "final_report": state.get("final_report", "") + live_report,
+    }
+
+
+def compile_graph_apply_to_live():
+    """Phase I: precheck → confirm → apply/rollback → (verify) → report のグラフ（全ステップ統合）。
+
+    フロー::
+
+        live_precheck
+            ↓ confirm (success)      ↓ abort (failure) → END
+        human_confirm
+            ↓ apply                  ↓ cancelled → END    ↓ rollback
+        live_apply              live_rollback
+            ↓ verify (verify_enabled=True)        ↓
+        live_verify             live_report ←──────
+            ↓                       ↑
+            └───────────────────────┘
+                (verify_enabled=False or rollback)
+
+    ``interrupt()`` を使用するため :class:`MemorySaver` チェックポインターが必須。
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+
+    graph = StateGraph(AgentState)
+    graph.add_node("live_precheck", live_precheck_node)
+    graph.add_node("human_confirm", human_confirm_live_node)
+    graph.add_node("live_apply", live_apply_node)
+    graph.add_node("live_rollback", live_rollback_node)
+    graph.add_node("live_verify", live_verify_node)
+    graph.add_node("live_report", live_report_node)
+
+    graph.set_entry_point("live_precheck")
+
+    graph.add_conditional_edges(
+        "live_precheck",
+        _should_continue_after_precheck,
+        {"confirm": "human_confirm", "abort": END},
+    )
+
+    graph.add_conditional_edges(
+        "human_confirm",
+        _should_continue_after_confirm,
+        {
+            "apply": "live_apply",
+            "rollback": "live_rollback",
+            "cancelled": END,
+        },
+    )
+
+    # live_apply 後: --live-verify 指定時は live_verify → live_report、それ以外は直接 live_report
+    graph.add_conditional_edges(
+        "live_apply",
+        _should_verify_after_apply,
+        {
+            "verify": "live_verify",
+            "report": "live_report",
+        },
+    )
+    graph.add_edge("live_verify", "live_report")
+    graph.add_edge("live_rollback", "live_report")
+    graph.add_edge("live_report", END)
+
+    return graph.compile(checkpointer=MemorySaver())
+
+
+def initial_state_apply_to_live(
+    requirement: str,
+    prompt_set: str = "demo",
+    inventory_path: str = "",
+    live_verify_enabled: bool = False,
+    lab_id: str = "",
+) -> AgentState:
+    """実機適用モードの初期ステートを生成するファクトリー関数。
+
+    Args:
+        requirement:         ネットワーク要件テキスト（CML 検証済み設計と一致すること）。
+        prompt_set:          使用するプロンプトセット名。
+        inventory_path:      インベントリ YAML のパス。省略時は inventory/<prompt_set>.yaml を使用。
+        live_verify_enabled: True の場合、適用後に pyATS で実機テストを実行する。
+        lab_id:              CML 上で検証済みのラボ ID。
+    """
+    return AgentState(
+        requirement=requirement,
+        prompt_set=prompt_set,
+        fault_simulation_enabled=False,
+        skip_deploy=False,
+        error_history=[],
+        topology_yaml="",
+        device_configs={},
+        lab_id=lab_id,
+        test_results=[],
+        test_plan_items=[],
+        error_log="",
+        retry_count=0,
+        fault_scenario_results=[],
+        fault_report="",
+        troubleshoot_lab_id="",
+        troubleshoot_issue="",
+        collected_state={},
+        diagnosis="",
+        fix_records=[],
+        troubleshoot_retry_count=0,
+        troubleshoot_report="",
+        analyze_request="",
+        analysis_result="",
+        live_inventory_path=inventory_path,
+        live_apply_records=[],
+        live_verify_enabled=live_verify_enabled,
+        live_human_decision="",
+        live_test_results=[],
+        live_report="",
+        final_report="",
+    )
+
+
+def compile_graph_live_precheck():
+    """Phase I Step 2: プレチェックのみを実行する最小グラフ（テスト・デバッグ用）。
+
+    フロー: live_precheck → END
+    後続ステップ（human_confirm / live_apply 等）は Step 3 以降で追加する。
+    """
+    graph = StateGraph(AgentState)
+    graph.add_node("live_precheck", live_precheck_node)
+    graph.set_entry_point("live_precheck")
+    graph.add_edge("live_precheck", END)
+    return graph.compile()
+
+
+# ---------------------------------------------------------------------------
+# Phase I: CLI ヘルパー
+# ---------------------------------------------------------------------------
+
+
+def _run_live_apply_flow(
+    cml_state: dict,
+    prompt_set: str,
+    inventory_path: str,
+    live_verify: bool) -> None:
+    """CML 検証済み状態から実機適用フローを実行する（CLI 専用）。
+
+    LangGraph の interrupt/resume 機構を使って Human 承認を取得し、
+    その結果に応じて apply または rollback を実行する。
+
+    Args:
+        cml_state:       CML 設計・検証フローの最終ステート。
+        prompt_set:      プロンプトセット名（インベントリ自動解決に使用）。
+        inventory_path:  インベントリ YAML のパス（空文字の場合は自動解決）。
+        live_verify:     True の場合、適用後に pyATS 実機テストを実行する。
+    """
+    import time
+    from langgraph.types import Command
+
+    print(f"\n{'='*60}", flush=True)
+    print("[Phase I] 実機適用モード 開始", flush=True)
+    print(f"{'='*60}", flush=True)
+
+    # CML 結果を引き継いで live apply 初期状態を構築
+    live_state = initial_state_apply_to_live(
+        requirement=cml_state.get("requirement", ""),
+        prompt_set=prompt_set,
+        inventory_path=inventory_path,
+        live_verify_enabled=live_verify,
+        lab_id=cml_state.get("lab_id", ""),
+    )
+    live_state["device_configs"] = cml_state.get("device_configs", {})
+    live_state["topology_yaml"] = cml_state.get("topology_yaml", "")
+    live_state["test_results"] = cml_state.get("test_results", [])
+    live_state["test_plan_items"] = cml_state.get("test_plan_items", [])
+    live_state["final_report"] = cml_state.get("final_report", "")
+
+    live_app = compile_graph_apply_to_live()
+    thread = {"configurable": {"thread_id": f"live-{prompt_set}-{int(time.time())}"}}
+
+    # 第 1 回目 invoke: live_precheck → human_confirm (interrupt) で一時停止
+    partial = live_app.invoke(live_state, thread)
+
+    # precheck 失敗（グラフが abort → END まで進んだ場合）
+    if partial and partial.get("error_log"):
+        import sys
+        print(f"\nエラー（プレチェック失敗）: {partial['error_log']}", file=sys.stderr)
+        sys.exit(1)
+
+    # 確認画面を表示（live_apply_records を使って組み立てる）
+    if partial:
+        msg_state: dict = {**live_state}
+        msg_state.update(
+            {k: partial[k] for k in ("live_apply_records", "test_results") if k in partial}
+        )
+        print("\n" + _build_confirmation_message(msg_state), flush=True)
+
+    # 人間の入力を取得
+    import sys
+    print()
+    try:
+        response = input("続行しますか？ (yes / no / rollback-only): ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        response = "no"
+
+    if response not in ("yes", "rollback-only"):
+        response = "no"
+
+    reason = ""
+    if response in ("no", "rollback-only"):
+        try:
+            reason = input("理由（省略可、Enter でスキップ）: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            reason = ""
+
+    # 第 2 回目 invoke: 承認結果を渡してフローを再開
+    result = live_app.invoke(
+        Command(resume={"decision": response, "reason": reason}),
+        thread,
+    )
+
+    print()
+    print(result.get("final_report", "(レポートなし)"), flush=True)
 
 
 def main() -> None:
@@ -1069,6 +2138,9 @@ def main() -> None:
             "  --analyze [ID]         既存ラボの設計を分析してレポートを出力する（変更なし）\n"
             "  --improve [ID]         既存ラボのコンフィグを改善して configs/<set>/ に保存する\n"
             "  --request '<改善要求>' --improve と併用する改善要求テキスト（任意）\n"
+            "  --apply-to-live        CML 検証成功後に実機へコンフィグ投入する（要インベントリ）\n"
+            "  --inventory <path>     --apply-to-live で使うインベントリ YAML のパスを明示指定する\n"
+            "  --live-verify          --apply-to-live 実行後に pyATS で実機テストを実行する\n"
             "  --rag-index [<dir>]    rag/ のテキストファイルを知識ベースに索引化する（要 chromadb）\n"
             "  --rag-clear-knowledge  知識ベースのインデックスを全消去する\n"
             "  --rag-stats            RAGストアの保存件数と保存場所を表示して終了する\n"
@@ -1084,6 +2156,8 @@ def main() -> None:
             "  agentic-ni demo --analyze                    # demo ラボの設計を分析する\n"
             "  agentic-ni demo --analyze abc-1234           # 指定 lab_id の設計を分析する\n"
             "  agentic-ni demo --improve --request 'OSPFにBFDを追加したい'\n"
+            "  agentic-ni demo --apply-to-live              # CML検証後に実機投入\n"
+            "  agentic-ni demo --apply-to-live --inventory inventory/prod.yaml --live-verify\n"
             "  agentic-ni --list\n"
             "  agentic-ni --rag-stats"
         )
@@ -1138,11 +2212,14 @@ def main() -> None:
     troubleshoot_mode: bool = "--troubleshoot" in args
     analyze_mode: bool = "--analyze" in args
     improve_mode: bool = "--improve" in args
+    apply_to_live: bool = "--apply-to-live" in args
+    live_verify: bool = "--live-verify" in args
     troubleshoot_lab_id: str | None = None
     troubleshoot_issue: str = ""
     analyze_lab_id: str | None = None
     improve_lab_id: str | None = None
     improve_request: str = ""
+    live_inventory_path: str = ""
     # フラグが消費する値（positionals から除外する）
     _flag_consumed: set[str] = set()
     for i, arg in enumerate(args):
@@ -1160,6 +2237,9 @@ def main() -> None:
             _flag_consumed.add(args[i + 1])
         if arg == "--request" and i + 1 < len(args) and not args[i + 1].startswith("-"):
             improve_request = args[i + 1]
+            _flag_consumed.add(args[i + 1])
+        if arg == "--inventory" and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            live_inventory_path = args[i + 1]
             _flag_consumed.add(args[i + 1])
 
     # 位置引数（フラグ以外かつフラグの値でないもの）= プロンプトセット名
@@ -1205,6 +2285,12 @@ def main() -> None:
         print(f"改善モード: ラボID={improve_lab_id or '(自動検索)'}")
         if improve_request:
             print(f"改善要求: {improve_request}")
+    if apply_to_live:
+        print(f"実機適用モード: 有効")
+        if live_inventory_path:
+            print(f"  インベントリ: {live_inventory_path}")
+        if live_verify:
+            print(f"  実機 pyATS 検証: 有効")
     print()
     if not (analyze_mode or improve_mode):
         print("【要件】")
@@ -1293,6 +2379,22 @@ def main() -> None:
 
     result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id))
     print(result.get("final_report", "(レポートなし)"))
+
+    # Phase I: 実機適用モード（--apply-to-live 指定時）
+    if apply_to_live and not dry_run:
+        test_results = result.get("test_results", [])
+        if not test_results or not all(r["result"] == "PASS" for r in test_results):
+            print(
+                "\nCML 検証がすべて PASS していないため、実機適用をスキップします。",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        _run_live_apply_flow(
+            cml_state=result,
+            prompt_set=prompt_set,
+            inventory_path=live_inventory_path,
+            live_verify=live_verify,
+        )
 
 
 if __name__ == "__main__":
