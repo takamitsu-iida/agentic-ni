@@ -431,6 +431,44 @@ class TestCheckRouteTable:
 
         assert result["found"] is False
 
+    def test_cidr_slash32_converted_to_dotted_mask(self):
+        """CIDR /32 を show ip route 用のドット付きマスクに変換することを確認。"""
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value={}) as mock_cmd:
+            from agentic_ni.tools.pyats_tools import check_route_table
+            check_route_table(SAMPLE_TESTBED_YAML, "R1", "1.1.1.1/32")
+
+        _args, _kwargs = mock_cmd.call_args
+        assert "show ip route 1.1.1.1 255.255.255.255" in _args
+
+    def test_cidr_slash24_converted_to_dotted_mask(self):
+        """CIDR /24 を show ip route 用のドット付きマスクに変換することを確認。"""
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value={}) as mock_cmd:
+            from agentic_ni.tools.pyats_tools import check_route_table
+            check_route_table(SAMPLE_TESTBED_YAML, "R1", "192.168.1.0/24")
+
+        _args, _kwargs = mock_cmd.call_args
+        assert "show ip route 192.168.1.0 255.255.255.0" in _args
+
+    def test_cidr_slash8_converted_to_dotted_mask(self):
+        """CIDR /8 を show ip route 用のドット付きマスクに変換することを確認。"""
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value={}) as mock_cmd:
+            from agentic_ni.tools.pyats_tools import check_route_table
+            check_route_table(SAMPLE_TESTBED_YAML, "R1", "10.0.0.0/8")
+
+        _args, _kwargs = mock_cmd.call_args
+        assert "show ip route 10.0.0.0 255.0.0.0" in _args
+
+    def test_no_mask_passed_as_is(self):
+        """マスクなし IP アドレスはそのまま渡すことを確認。"""
+        with patch("agentic_ni.tools.pyats_tools.run_show_command", return_value={}) as mock_cmd:
+            from agentic_ni.tools.pyats_tools import check_route_table
+            check_route_table(SAMPLE_TESTBED_YAML, "R1", "1.1.1.1")
+
+        _args, _kwargs = mock_cmd.call_args
+        assert "show ip route 1.1.1.1" in _args
+        # スラッシュが含まれないこと
+        assert "/" not in _args[2]
+
 
 # ---------------------------------------------------------------------------
 # check_interface_status のテスト

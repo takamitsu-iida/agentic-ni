@@ -3,6 +3,7 @@
 Phase 7: Human-in-the-Loop、レポートフォーマット整備、E2E統合済み。
 障害シミュレーション（リンク断・復旧・再テスト）対応済み。
 Phase H: トラブルシューティングモード（既存ラボへのインクリメンタル修正）対応済み。
+Phase E: 設計分析（--analyze）・改善計画生成（--improve）対応済み。
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
-from agentic_ni.agents import architect, fault_simulator, troubleshooter, validator
+from agentic_ni.agents import architect, analyzer, fault_simulator, troubleshooter, validator
 from agentic_ni.state import AgentState, FaultScenarioResult
 
 load_dotenv()
@@ -583,6 +584,8 @@ def initial_state_troubleshoot(
         fix_records=[],
         troubleshoot_retry_count=0,
         troubleshoot_report="",
+        analyze_request="",
+        analysis_result="",
         final_report="",
     )
 
@@ -646,6 +649,94 @@ def initial_state(
         fix_records=[],
         troubleshoot_retry_count=0,
         troubleshoot_report="",
+        analyze_request="",
+        analysis_result="",
+        final_report="",
+    )
+
+
+def initial_state_analyze(
+    lab_id: str,
+    prompt_set: str = "demo",
+) -> AgentState:
+    """分析モードの初期ステートを生成するファクトリー関数。
+
+    Args:
+        lab_id: 分析対象の既存 CML ラボの ID。
+        prompt_set: 要件コンテキストに使用するプロンプトセット名。
+    """
+    try:
+        requirement = load_requirement(prompt_set)
+    except FileNotFoundError:
+        requirement = f"ラボ {lab_id} の設計分析"
+    return AgentState(
+        requirement=requirement,
+        prompt_set=prompt_set,
+        fault_simulation_enabled=False,
+        skip_deploy=False,
+        error_history=[],
+        topology_yaml="",
+        device_configs={},
+        lab_id=lab_id,
+        test_results=[],
+        test_plan_items=[],
+        error_log="",
+        retry_count=0,
+        fault_scenario_results=[],
+        fault_report="",
+        troubleshoot_lab_id=lab_id,
+        troubleshoot_issue="",
+        collected_state={},
+        diagnosis="",
+        fix_records=[],
+        troubleshoot_retry_count=0,
+        troubleshoot_report="",
+        analyze_request="",
+        analysis_result="",
+        final_report="",
+    )
+
+
+def initial_state_improve(
+    lab_id: str,
+    analyze_request: str = "",
+    prompt_set: str = "demo",
+) -> AgentState:
+    """改善モードの初期ステートを生成するファクトリー関数。
+
+    Args:
+        lab_id: 改善対象の既存 CML ラボの ID。
+        analyze_request: 改善要求の自然言語テキスト。
+        prompt_set: 要件コンテキストに使用するプロンプトセット名。
+    """
+    try:
+        requirement = load_requirement(prompt_set)
+    except FileNotFoundError:
+        requirement = f"ラボ {lab_id} の設計改善"
+    return AgentState(
+        requirement=requirement,
+        prompt_set=prompt_set,
+        fault_simulation_enabled=False,
+        skip_deploy=False,
+        error_history=[],
+        topology_yaml="",
+        device_configs={},
+        lab_id=lab_id,
+        test_results=[],
+        test_plan_items=[],
+        error_log="",
+        retry_count=0,
+        fault_scenario_results=[],
+        fault_report="",
+        troubleshoot_lab_id=lab_id,
+        troubleshoot_issue="",
+        collected_state={},
+        diagnosis="",
+        fix_records=[],
+        troubleshoot_retry_count=0,
+        troubleshoot_report="",
+        analyze_request=analyze_request,
+        analysis_result="",
         final_report="",
     )
 
@@ -677,24 +768,29 @@ def main() -> None:
             "要件はプロンプトセット内の requirement.md に記載してください。\n"
             "\n"
             "オプション:\n"
-            "  --list               利用可能なプロンプトセット一覧を表示して終了する\n"
-            "  --dry-run            CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
-            "  --fault-sim          構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
-            "  --troubleshoot [ID]  既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索）\n"
-            "  --issue '<説明>'     --troubleshoot と併用する問題の説明（任意）\n"
-            "  --rag-index [<dir>]  rag/ のテキストファイルを知識ベースに索引化する（要 chromadb）\n"
-            "  --rag-clear-knowledge 知識ベースのインデックスを全消去する\n"
-            "  --rag-stats          RAGストアの保存件数と保存場所を表示して終了する\n"
-            "  -h / --help          このヘルプを表示して終了する\n"
+            "  --list                 利用可能なプロンプトセット一覧を表示して終了する\n"
+            "  --dry-run              CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
+            "  --fault-sim            構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
+            "  --troubleshoot [ID]    既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索）\n"
+            "  --issue '<説明>'       --troubleshoot と併用する問題の説明（任意）\n"
+            "  --analyze [ID]         既存ラボの設計を分析してレポートを出力する（変更なし）\n"
+            "  --improve [ID]         既存ラボのコンフィグを改善して configs/<set>/ に保存する\n"
+            "  --request '<改善要求>' --improve と併用する改善要求テキスト（任意）\n"
+            "  --rag-index [<dir>]    rag/ のテキストファイルを知識ベースに索引化する（要 chromadb）\n"
+            "  --rag-clear-knowledge  知識ベースのインデックスを全消去する\n"
+            "  --rag-stats            RAGストアの保存件数と保存場所を表示して終了する\n"
+            "  -h / --help            このヘルプを表示して終了する\n"
             "\n"
             "例:\n"
-            "  agentic-ni demo                  # demo セットの要件で実行\n"
-            "  agentic-ni ospf_l3vpn            # ospf_l3vpn セットの要件で実行\n"
-            "  agentic-ni demo --dry-run          # CMLなしでコンフィグ生成のみ\n"
-            "  agentic-ni demo2 --fault-sim     # 障害シミュレーションありで実行\n"
-            "  agentic-ni demo2 --troubleshoot        # demo2 ラボをタイトルで自動検索しトラブルシュート\n"
-            "  agentic-ni demo2 --troubleshoot abc-1234  # lab_id を明示してトラブルシュート\n"
-            "  agentic-ni demo2 --troubleshoot --issue 'OSPFが確立しない'  # 問題説明付き\n"
+            "  agentic-ni demo                              # demo セットの要件で実行\n"
+            "  agentic-ni ospf_l3vpn                        # ospf_l3vpn セットの要件で実行\n"
+            "  agentic-ni demo --dry-run                    # CMLなしでコンフィグ生成のみ\n"
+            "  agentic-ni demo2 --fault-sim                 # 障害シミュレーションありで実行\n"
+            "  agentic-ni demo2 --troubleshoot              # demo2 ラボを自動検索しトラブルシュート\n"
+            "  agentic-ni demo2 --troubleshoot abc-1234     # lab_id を明示してトラブルシュート\n"
+            "  agentic-ni demo --analyze                    # demo ラボの設計を分析する\n"
+            "  agentic-ni demo --analyze abc-1234           # 指定 lab_id の設計を分析する\n"
+            "  agentic-ni demo --improve --request 'OSPFにBFDを追加したい'\n"
             "  agentic-ni --list\n"
             "  agentic-ni --rag-stats"
         )
@@ -746,10 +842,14 @@ def main() -> None:
 
     dry_run = "--dry-run" in args
     fault_simulation_enabled = "--fault-sim" in args
-    # lab_id は省略可（省略時はラボタイトルで自動検索）
     troubleshoot_mode: bool = "--troubleshoot" in args
+    analyze_mode: bool = "--analyze" in args
+    improve_mode: bool = "--improve" in args
     troubleshoot_lab_id: str | None = None
     troubleshoot_issue: str = ""
+    analyze_lab_id: str | None = None
+    improve_lab_id: str | None = None
+    improve_request: str = ""
     # フラグが消費する値（positionals から除外する）
     _flag_consumed: set[str] = set()
     for i, arg in enumerate(args):
@@ -759,20 +859,33 @@ def main() -> None:
         if arg == "--issue" and i + 1 < len(args) and not args[i + 1].startswith("-"):
             troubleshoot_issue = args[i + 1]
             _flag_consumed.add(args[i + 1])
+        if arg == "--analyze" and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            analyze_lab_id = args[i + 1]
+            _flag_consumed.add(args[i + 1])
+        if arg == "--improve" and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            improve_lab_id = args[i + 1]
+            _flag_consumed.add(args[i + 1])
+        if arg == "--request" and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            improve_request = args[i + 1]
+            _flag_consumed.add(args[i + 1])
 
     # 位置引数（フラグ以外かつフラグの値でないもの）= プロンプトセット名
     positional = [
         a for a in args
         if not a.startswith("-") and a not in _flag_consumed
     ]
-    if not positional:
+    # --analyze / --improve はプロンプトセット省略可（デフォルト: "demo"）
+    if not positional and (analyze_mode or improve_mode):
+        prompt_set = "demo"
+    elif not positional:
         print("エラー: プロンプトセット名を指定してください。", file=sys.stderr)
         print("  利用可能なセット確認: agentic-ni --list", file=sys.stderr)
         sys.exit(1)
-    if len(positional) > 1:
+    elif len(positional) > 1:
         print(f"エラー: 引数が多すぎます: {positional}", file=sys.stderr)
         sys.exit(1)
-    prompt_set = positional[0]
+    else:
+        prompt_set = positional[0]
 
     # 要件はプロンプトセットの requirement.md から読み込む
     try:
@@ -793,12 +906,53 @@ def main() -> None:
             print("トラブルシューティングモード: ラボ自動検索")
         if troubleshoot_issue:
             print(f"問題説明: {troubleshoot_issue}")
+    if analyze_mode:
+        print(f"分析モード: ラボID={analyze_lab_id or '(自動検索)'}")
+    if improve_mode:
+        print(f"改善モード: ラボID={improve_lab_id or '(自動検索)'}")
+        if improve_request:
+            print(f"改善要求: {improve_request}")
     print()
-    print("【要件】")
-    for line in requirement.splitlines():
-        print(f"  {line}")
-    print()
+    if not (analyze_mode or improve_mode):
+        print("【要件】")
+        for line in requirement.splitlines():
+            print(f"  {line}")
+        print()
     print("処理を開始します...\n")
+
+    # 分析モード
+    if analyze_mode:
+        if not analyze_lab_id:
+            lab_title = f"agentic-ni-{prompt_set}"
+            from agentic_ni.tools import cml_tools as _cml
+            found = _cml.find_lab_by_title(lab_title)
+            if found is None:
+                print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
+                print(f"  先に通常モードで実行してラボを作成するか、--analyze に lab_id を明示してください。", file=sys.stderr)
+                sys.exit(1)
+            analyze_lab_id = found
+            print(f"ラボを自動検出: {lab_title} (ID={analyze_lab_id})")
+        app = compile_graph_analyze()
+        result = app.invoke(initial_state_analyze(analyze_lab_id, prompt_set))
+        print(result.get("final_report", "(レポートなし)"))
+        return
+
+    # 改善モード
+    if improve_mode:
+        if not improve_lab_id:
+            lab_title = f"agentic-ni-{prompt_set}"
+            from agentic_ni.tools import cml_tools as _cml
+            found = _cml.find_lab_by_title(lab_title)
+            if found is None:
+                print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
+                print(f"  先に通常モードで実行してラボを作成するか、--improve に lab_id を明示してください。", file=sys.stderr)
+                sys.exit(1)
+            improve_lab_id = found
+            print(f"ラボを自動検出: {lab_title} (ID={improve_lab_id})")
+        app = compile_graph_improve()
+        result = app.invoke(initial_state_improve(improve_lab_id, improve_request, prompt_set))
+        print(result.get("final_report", "(レポートなし)"))
+        return
 
     # トラブルシューティングモード
     if troubleshoot_mode:

@@ -113,6 +113,13 @@ class AgentState(TypedDict):
     troubleshoot_report: str
     """トラブルシューティング完了時の詳細レポート（Markdown）。"""
 
+    # --- Phase E: 分析・改善モード ---
+    analyze_request: str
+    """--improve で指定された改善要求テキスト（自然言語）。"""
+
+    analysis_result: str
+    """--analyze または --improve で生成された分析・改善計画のテキスト（Markdown）。"""
+
     # --- 最終出力 ---
     final_report: str
     """全PASS時またはエスカレーション時に生成される最終レポート。"""

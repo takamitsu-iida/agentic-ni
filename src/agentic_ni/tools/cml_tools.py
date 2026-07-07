@@ -477,3 +477,43 @@ def get_lab_links(lab_id: str) -> list[dict]:
         }
         for link in lab.links()
     ]
+
+
+def export_lab_configs(lab_id: str) -> dict[str, str]:
+    """ラボの全ノードの Day-0 コンフィグを CML から取得する。
+
+    CML に保存された初期コンフィグ（start-up config）を返す。
+    pyATS 不要で、停止中のラボにも使用できる。
+
+    Args:
+        lab_id: 対象ラボのID。
+
+    Returns:
+        dict[str, str]: {ノード名: コンフィグテキスト}。コンフィグ未設定のノードは空文字。
+
+    Raises:
+        KeyError: lab_id が存在しない場合。
+    """
+    client = _get_client()
+    lab = _get_lab(client, lab_id)
+    return {
+        node.label: node.configuration or ""
+        for node in lab.nodes()
+    }
+
+
+def export_lab_topology(lab_id: str) -> str:
+    """ラボのトポロジー定義を CML から YAML 形式でエクスポートする。
+
+    Args:
+        lab_id: 対象ラボのID。
+
+    Returns:
+        str: CML トポロジー YAML 文字列。
+
+    Raises:
+        KeyError: lab_id が存在しない場合。
+    """
+    client = _get_client()
+    lab = _get_lab(client, lab_id)
+    return lab.export()

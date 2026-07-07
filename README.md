@@ -489,11 +489,145 @@ agentic-ni demo2 --fault-sim
 
 <br>
 
-## 実装着手順序（推奨）
+### Phase H — トラブルシューティングモード
+
+**目標**: 稼働中の既存 CML ラボに接続し、「診断 → インクリメンタル修正 → 検証」のサイクルで問題を自律解決します。
+
+**タスク**:
+- [x] `src/agentic_ni/agents/troubleshooter.py` を実装
+  - `run_collect`: 全機器の `running-config` と `show` コマンド出力を収集
+  - `run_diagnose`: LLM が根本原因を `DiagnosisResult`（Pydantic）として診断
+  - `run_fix`: LLM が `FixPlan`（Pydantic）を生成し `configure terminal` で差分投入
+- [x] `src/agentic_ni/prompts/troubleshooter_system.md` を作成
+- [x] `state.py` に `TroubleshootFixRecord` TypedDict と関連フィールドを追加
+- [x] `graph.py` に `compile_graph_troubleshoot()` / `initial_state_troubleshoot()` を実装
+- [x] `--troubleshoot` / `--issue` CLI オプションを実装
+- [x] `tests/test_troubleshooter.py` でユニットテスト PASS
+
+**実装したコンポーネント**:
+
+| コンポーネント | 内容 |
+|---|---|
+| `troubleshooter.py` | `run_collect` / `run_diagnose` / `run_fix` の 3 関数 |
+| `DiagnosisResult` (Pydantic) | `root_cause` / `affected_devices` / `severity` / `summary` |
+| `FixPlan` / `FixCommand` (Pydantic) | デバイス別修正コマンドと rollback コマンド |
+| `troubleshooter_system.md` | トラブルシューター専用システムプロンプト |
+| `compile_graph_troubleshoot()` | `collect → diagnose → fix → verify` ループグラフ |
+| `initial_state_troubleshoot()` | トラブルシューティングモード用初期ステートファクトリー |
+| `TroubleshootFixRecord` (TypedDict) | 修正履歴レコード（`state.py`） |
+
+**Phase A/B との主な違い**:
+
+| 項目 | Phase A（設計・検証） | Phase H（トラブルシューティング） |
+|---|---|---|
+| 起点 | 自然言語の要件 | 既存ラボ ID + 問題説明 |
+| 修正方式 | wipe + 再デプロイ | `configure terminal` による差分適用 |
+| 主担当エージェント | 設計エージェント + 検証エージェント | トラブルシューターエージェント |
+| ラボ作成 | あり（新規） | なし（既存ラボに接続） |
+
+**実行例**:
+
+```bash
+# 既存ラボの問題を診断・自動修正
+agentic-ni demo --troubleshoot <lab_id>
+
+# 問題の説明を添えて実行
+agentic-ni demo --troubleshoot <lab_id> --issue 'OSPF ネイバーが確立しない'
+```
 
 ```
-Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase B
-  基盤      骨格      CML操作    pyATS     設計AI    検証AI     統合       障害シミュレーション
+[トラブルシューティング] 機器状態を収集中...
+[トラブルシューティング 診断 1/3] 根本原因を分析中...
+  根本原因: R1 の router ospf 1 に network 文が設定されていない。
+  影響デバイス: ['R1']
+  重大度: config_error
+[トラブルシューティング] 修正コマンドを生成・投入中...
+  [R1] router ospf 1 / network 0.0.0.0 255.255.255.255 area 0 → ✅ 成功
+[トラブルシューティング] 検証テストを実行中...
+  (1/2) OSPF ネイバー確認 → ✅ PASS
+  (2/2) ping 2.2.2.2      → ✅ PASS
+>>> トラブルシューティング完了レポートを生成しています...
+```
+
+**完了基準**: `--troubleshoot` で既存ラボに接続し、`collect → diagnose → fix → verify` のサイクルが最大 `TROUBLESHOOT_MAX_RETRIES`（デフォルト 3 回）まで繰り返せること。 ✅ 完了（ユニットテスト PASS）
+
+<br>
+
+---
+
+<br>
+
+### Phase E — 設計分析・改善モード
+
+**目標**: 既存の CML ラボを読み込み、AI が設計品質を評価して問題点・改善提案をレポートします。
+また、改善要求に基づいて新しいコンフィグを自動生成しファイルに保存します。
+
+**タスク**:
+- [x] `src/agentic_ni/agents/analyzer.py` を実装
+  - `run_analyze`: 機器状態を LLM で分析し `AnalysisResult`（Pydantic）に診断
+  - `run_improve`: 改善要求から `ImprovementOutput`（Pydantic）として改善コンフィグを生成
+- [x] `src/agentic_ni/prompts/analyzer_system.md` を作成
+- [x] `cml_tools.py` に `export_lab_configs` / `export_lab_topology` を追加
+- [x] `state.py` に `analyze_request` / `analysis_result` フィールドを追加
+- [x] `graph.py` に `compile_graph_analyze()` / `compile_graph_improve()` を実装
+- [x] `--analyze` / `--improve` / `--request` CLI オプションを実装
+- [x] `tests/test_analyzer.py` でユニットテスト 30 件 PASS
+
+**実装したコンポーネント**:
+
+| コンポーネント | 内容 |
+|---|---|
+| `analyzer.py` | `run_analyze` / `run_improve` の 2 関数 |
+| `AnalysisIssue` (Pydantic) | `severity` / `device` / `description` / `recommendation` |
+| `AnalysisResult` (Pydantic) | `overall_rating` / `summary` / `issues` / `improvement_suggestions` |
+| `ImprovementOutput` (Pydantic) | 改善後 `device_configs` / `changes_summary` / `rationale` |
+| `analyzer_system.md` | 分析・改善エージェント専用システムプロンプト |
+| `compile_graph_analyze()` | `collect → analyze → report` グラフ |
+| `compile_graph_improve()` | `collect → improve → save` グラフ |
+| `export_lab_configs(lab_id)` | CML から Day-0 コンフィグを取得（`cml_tools.py`） |
+| `export_lab_topology(lab_id)` | CML からトポロジー YAML をエクスポート（`cml_tools.py`） |
+| `tests/test_analyzer.py` | ユニットテスト 30 件 |
+
+**Phase H (troubleshooter) との主な違い**:
+
+| 項目 | Phase E --analyze | Phase E --improve | Phase H |
+|---|---|---|---|
+| 目的 | 設計品質評価 | 設計改善コンフィグ生成 | 障害の自動修正 |
+| 変更の適用 | なし（読み取り専用） | ファイル保存のみ（deploy なし） | CML に直接投入 |
+| ループ | なし（1 パス） | なし（1 パス） | 最大 3 回リトライ |
+
+**実行例**:
+
+```bash
+# 設計分析（変更なし）
+agentic-ni demo --analyze
+agentic-ni demo --analyze <lab_id>
+
+# 設計改善（configs/demo/ にファイル保存）
+agentic-ni demo --improve --request "OSPFにBFDを追加したい"
+agentic-ni demo --improve <lab_id> --request "Loopbackインターフェースを追加したい"
+```
+
+```
+[設計分析] ラボ lab-abc-001 を分析中...
+  分析結果: [needs_improvement] 基本的な OSPF 接続は機能しているが...
+>>> 設計分析レポートを生成しています...
+
+## 設計評価: ⚠️ 要改善
+
+### 検出された問題 (2 件)
+
+| 重大度 | デバイス | 問題 | 推奨対応 |
+|---|---|---|---|
+| WARNING | R1 | router-id が未設定 | router ospf 1 で router-id 1.1.1.1 を設定 |
+| INFO | all | no ip domain-lookup が未設定 | グローバル設定で no ip domain-lookup を追加 |
+```
+
+**完了基準**: `--analyze` で既存ラボの設計評価レポートが出力され、`--improve --request` で改善コンフィグが `configs/<set>/` に保存されること。 ✅ 完了（30 件ユニットテスト PASS）
+
+```
+Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase B → Phase H → Phase E
+  基盤      骨格      CML操作    pyATS     設計AI    検証AI     統合       障害シミュ   トラブルシュ  分析・改善
   (llm.py含む)
 ```
 
@@ -955,6 +1089,9 @@ CLI引数として要件テキストを渡すことはできません。
 | `--fault-sim` | 全テストPASS後に障害シミュレーション（リンク断・復旧・再テスト）を実行する |
 | `--troubleshoot [ID]` | 既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索） |
 | `--issue '<説明>'` | --troubleshoot と併用する問題の説明（任意） |
+| `--analyze [ID]` | 既存ラボの設計を分析しレポートを出力する（変更なし） |
+| `--improve [ID]` | 既存ラボのコンフィグを改善して `configs/<set>/` に保存する |
+| `--request '<改善要求>'` | --improve と併用する改善要求テキスト（任意） |
 | `--rag-index [<dir>]` | `rag/` のテキストファイルを知識ベースに索引化する（要 `chromadb`） |
 | `--rag-clear-knowledge` | 知識ベースのインデックスを全消去する |
 | `--rag-stats` | 実行ログRAG・知識ベースの保存件数と保存場所を表示して終了する |
@@ -978,6 +1115,14 @@ agentic-ni demo --dry-run
 
 # 障害シミュレーション（全テストPASS後にリンク断・復旧・再テストを実行）
 agentic-ni demo2 --fault-sim
+
+# 既存ラボの設計を分析（変更なし・レポートのみ）
+agentic-ni demo --analyze
+agentic-ni demo --analyze abc-1234   # lab_id を明示して分析
+
+# 既存ラボのコンフィグを改善して configs/demo/ に保存
+agentic-ni demo --improve --request 'OSPFにBFDを追加したい'
+agentic-ni demo --improve abc-1234 --request 'Loopbackインターフェースを追加'
 
 # 知識ベースのテキストファイルを索引化
 agentic-ni --rag-index
@@ -1340,22 +1485,59 @@ agentic-ni demo --dry-run
 
 <br>
 
-### Phase E — 既存CMLラボの取り込みと分析（工数中）
+### Phase E — 既存CMLラボの取り込みと分析（工数中） ✅ 完了
 
-**目標**: 既存のCMLラボを読み込み、AIが問題点・改善点を分析します。
+**目標**: 既存のCMLラボを読み込み、AIが設計品質を評価して問題点・改善提案をレポートします。
+また、改善要求に基づいて新しいコンフィグを自動生成しファイルに保存します。
 
 ```bash
-# 既存ラボを分析
-agentic-ni --analyze <lab_id>
+# 既存ラボの設計を分析してレポートを出力（変更なし）
+agentic-ni demo --analyze
+agentic-ni demo --analyze <lab_id>
 
-# 既存ラボをベースに改善提案
-agentic-ni --improve <lab_id> "OSPFにBFDを追加したい"
+# 既存ラボのコンフィグを改善して configs/<set>/ に保存
+agentic-ni demo --improve --request "OSPFにBFDを追加したい"
+agentic-ni demo --improve <lab_id> --request "Loopbackインターフェースを追加したい"
 ```
 
-**実装方針**:
-- `cml_tools.py` に `export_lab_configs(lab_id)` を追加
-- 既存コンフィグを取得して `AgentState` に注入
-- 設計エージェントに「既存設計の改善モード」を追加
+**--analyze フロー（実装済み）**:
+```
+1. collect  — 全機器の running-config と show コマンド出力を収集
+2. analyze  — LLM が設計品質を評価（問題 / 改善提案）
+3. report   — 設計分析レポートを出力（変更なし）
+```
+
+**--improve フロー（実装済み）**:
+```
+1. collect  — 全機器の running-config を収集
+2. improve  — LLM が改善要求に基づいて改善後のコンフィグを生成
+3. save     — configs/<prompt_set>/<device>.cfg に保存してレポートを出力
+```
+
+**Phase H (troubleshooter) との主な違い**:
+
+| 項目 | Phase E --analyze | Phase E --improve | Phase H |
+|---|---|---|---|
+| 目的 | 設計品質評価 | 設計改善コンフィグ生成 | 障害の自動修正 |
+| 変更の適用 | なし（読み取り専用） | ファイル保存のみ（deploy なし） | CML に直接投入 |
+| ループ | なし（1 パス） | なし（1 パス） | 最大 3 回リトライ |
+
+**実装したコンポーネント**:
+
+| コンポーネント | 内容 |
+|---|---|
+| `analyzer.py` | `run_analyze` / `run_improve` の 2 関数 |
+| `AnalysisIssue` (Pydantic) | `severity` / `device` / `description` / `recommendation` |
+| `AnalysisResult` (Pydantic) | `overall_rating` / `summary` / `issues` / `improvement_suggestions` |
+| `ImprovementOutput` (Pydantic) | 改善後 `device_configs` / `changes_summary` / `rationale` |
+| `analyzer_system.md` | 分析・改善エージェント専用システムプロンプト |
+| `compile_graph_analyze()` | `collect → analyze → report` グラフ |
+| `compile_graph_improve()` | `collect → improve → save` グラフ |
+| `export_lab_configs(lab_id)` | CML から Day-0 コンフィグを取得（`cml_tools.py`） |
+| `export_lab_topology(lab_id)` | CML からトポロジー YAML をエクスポート（`cml_tools.py`） |
+| `tests/test_analyzer.py` | ユニットテスト 30 件 PASS |
+
+**完了基準**: `--analyze` で既存ラボの設計評価レポートが出力され、`--improve --request` で改善コンフィグが `configs/<set>/` に保存されること。 ✅ 完了（30 件ユニットテスト PASS）
 
 <br>
 
@@ -1407,826 +1589,45 @@ agentic-ni --improve <lab_id> "OSPFにBFDを追加したい"
 
 <br>
 
-### Phase H — トラブルシューティングモード（工数大）
+### Phase H — トラブルシューティングモード（工数大） ✅ 完了
 
-**目標**: 「動かない既存構成の原因診断」に特化したモードを追加します。
+**目標**: 「動かない既存構成の原因診断と自動修正」に特化したモードを追加します。
 
 ```bash
-# 既存ラボの問題を診断
-agentic-ni --troubleshoot <lab_id>
+# 既存ラボの問題を診断・自動修正
+agentic-ni demo --troubleshoot <lab_id>
+agentic-ni demo --troubleshoot <lab_id> --issue 'OSPF ネイバーが上がらない'
 ```
 
-**実行フロー**:
+**実行フロー（実装済み）**:
 ```
-1. 既存ラボのコンフィグとShow結果を取得
-2. 設計エージェント（診断モード）が問題を推論
-3. 検証エージェントが問題箇所を特定するテストを実行
-4. 根本原因と修正手順をレポート出力
-```
-
-**実装方針**:
-- `graph.py` に `compile_graph_troubleshoot()` を追加
-- 診断モード専用のプロンプトセット（`troubleshoot/architect.md`）を作成
-- 修正提案にとどまり自動変更はしません（安全のため）。
-
-
-
-<br><br><br><br><br>
-
-`agentic-ni static` の実行例。
-
-初回実行時はエンド・エンドの疎通に失敗しているが、原因を分析して、ホストにデフォルトルートがないことを突き止めている。
-２回目の施行ではホストにデフォルトルートが設定されているため、エンド・エンドの疎通に成功し、要件を満たしたネットワークを完成させている。
-もちろん、プロンプトで「ホストにはデフォルトルートを設定しておくこと」と書いておけば初回実行時で完了できる。
-
-```
-(agentic-ni) iida@s400win:~/git/agentic-ni$ agentic-ni static
-プロンプトセット: static
-
-【要件】
-  ## ネットワーク要件
-  - R1（ルータ1）とR2（ルータ2）を直接接続する
-  - 疎通確認用の端末としてR1の背後にホストを1台配置する
-  - 疎通確認用の端末としてR2の背後にホストを1台配置する
-
-  ## 機器要件
-  - R1とR2のノード定義はiosvを使用する
-  - 疎通確認用のホストのノード定義はiol-xeを使用する
-  - 疎通確認用のホストのインタフェースはEthernet0/0を使用する
-
-  ## ネットワークアドレス
-  - 共通の接続セグメントは 192.168.12.0/24 とする
-  - R1の背後に 192.168.10.0/24 を配置する
-  - R2の背後に 192.168.20.0/24 を配置する
-
-  ## ルーティング要件
-  - 両拠点間の通信は、スタティックルーティング（静的ルート）を用いて開通させること
-
-処理を開始します...
-
-
-============================================================
-[第1回 / 上限5回]  設計エージェント  (初回設計)
-============================================================
-  >>> LLM にトポロジーとコンフィグを生成させています...
-  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。
-  <<< 設計完了
-
-[第1回 / 上限5回]  検証エージェント  開始
-  [1/4] CML にデプロイ中...
-    ラボをインポート中...
-    コンフィグを投入中 (4 ノード)...
-    ラボを起動中...
-    ノードの起動を待機中...
-    起動完了 (lab_id=21860d61-0556-48e3-a7be-3cf751e83905)
-  [1/4] デプロイ完了 (lab_id=21860d61-0556-48e3-a7be-3cf751e83905)
-  [2/4] テスト計画を立案中...
-  [2/4] テスト計画完了 (7 件)
-  [3/4] テストを実行中...
-        (1/7) R1のGigabitEthernet0/0インターフェースの状態を確認
-               → ✅ PASS  GigabitEthernet0/0: line=up, protocol=up
-        (2/7) R1のGigabitEthernet0/1インターフェースの状態を確認
-               → ✅ PASS  GigabitEthernet0/1: line=up, protocol=up
-        (3/7) R2のGigabitEthernet0/1インターフェースの状態を確認
-               → ✅ PASS  GigabitEthernet0/1: line=up, protocol=up
-        (4/7) Host1からHost2（192.168.20.2）へのpingを確認
-               → ❌ FAIL  ping 192.168.20.2 FAILED
-        (5/7) R1から共通セグメント接続のR2（192.168.12.2）へのpingを確認
-               → ✅ PASS  ping 192.168.12.2 OK
-        (6/7) Host1からR1の最寄りゲートウェイ（192.168.10.1）へのpingを確認
-               → ✅ PASS  ping 192.168.10.1 OK
-        (7/7) Host2からR2の最寄りゲートウェイ（192.168.20.1）へのpingを確認
-               → ✅ PASS  ping 192.168.20.1 OK
-  [4/4] 失敗原因を AI が分析中... (1 件失敗)
-  [4/4] 分析完了
-
-  『根本原因』 Host1からHost2へのpingが通らない原因は、Host1およびHost2でデフォルトゲートウェイが設定されていないことです。デフォルトゲートウェイが設定されておらず、両ホストのルーティングが完了していないためです。
-  『修正依頼』 Host1でデフォルトゲートウェイを192.168.10.1に、Host2でデフォルトゲートウェイを192.168.20.1に設定してください。
-
-
-============================================================
-[第2回 / 上限5回]  設計エージェント  (修正設計)
-============================================================
-  >>> LLM にトポロジーとコンフィグを生成させています...
-  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。
-  【設計方針】 Host1とHost2にデフォルトゲートウェイを設定し、双方向の通信を可能にしました。
-  <<< 設計完了
-
-[第2回 / 上限5回]  検証エージェント  開始
-  [1/4] CML にデプロイ中...
-    既存ラボを停止・wipe中...
-    コンフィグを更新中 (4 ノード)...
-    ラボを再起動中...
-    ノードの起動を待機中...
-    起動完了 (lab_id=21860d61-0556-48e3-a7be-3cf751e83905)
-  [1/4] デプロイ完了 (lab_id=21860d61-0556-48e3-a7be-3cf751e83905)
-  [2/4] テスト計画を立案中...
-  [2/4] テスト計画完了 (4 件)
-  [3/4] テストを実行中...
-        (1/4) Verify that R1's GigabitEthernet0/0 interface is up/up.
-               → ✅ PASS  GigabitEthernet0/0: line=up, protocol=up
-        (2/4) Verify that R1's GigabitEthernet0/1 interface is up/up.
-               → ✅ PASS  GigabitEthernet0/1: line=up, protocol=up
-        (3/4) Verify that R2's GigabitEthernet0/0 interface is up/up.
-               → ✅ PASS  GigabitEthernet0/0: line=up, protocol=up
-        (4/4) Check connectivity between Host1 (behind R1) and Host2 (behind R2) to ensure static routing is implemented correctly.
-               → ✅ PASS  ping 192.168.20.2 OK
-  [4/4] 全テスト PASS
-
-  >>> 全テスト PASS! 最終レポートを生成しています...
-# 検証成功レポート
-
-**生成日時**: 2026-07-06 21:20:30
-
-## 要件
-## ネットワーク要件
-- R1（ルータ1）とR2（ルータ2）を直接接続する
-- 疎通確認用の端末としてR1の背後にホストを1台配置する
-- 疎通確認用の端末としてR2の背後にホストを1台配置する
-
-## 機器要件
-- R1とR2のノード定義はiosvを使用する
-- 疎通確認用のホストのノード定義はiol-xeを使用する
-- 疎通確認用のホストのインタフェースはEthernet0/0を使用する
-
-## ネットワークアドレス
-- 共通の接続セグメントは 192.168.12.0/24 とする
-- R1の背後に 192.168.10.0/24 を配置する
-- R2の背後に 192.168.20.0/24 を配置する
-
-## ルーティング要件
-- 両拠点間の通信は、スタティックルーティング（静的ルート）を用いて開通させること
-
-## 概要
-- 試行回数: 2 回
-- PASSテスト: 4 件
-- FAILテスト: 0 件
-- ラボID: 21860d61-0556-48e3-a7be-3cf751e83905
-
-## ネットワーク設計
-
-### トポロジー定義（CML YAML）
-```yaml
-lab:
-  title: agentic-ni-static
-  description: "Direct connection between R1 and R2 with hosts behind each router for connectivity check."
-  notes: ""
-  timestamp: 0
-  version: "0.1.0"
-
-nodes:
-  - id: "n0"
-    label: "R1"
-    node_definition: "iosv"
-    x: -200
-    y: 0
-    configuration: ""
-    interfaces:
-      - id: "i0"
-        label: "GigabitEthernet0/0"
-        slot: 0
-        type: physical
-      - id: "i1"
-        label: "GigabitEthernet0/1"
-        slot: 1
-        type: physical
-  - id: "n1"
-    label: "R2"
-    node_definition: "iosv"
-    x: 200
-    y: 0
-    configuration: ""
-    interfaces:
-      - id: "i0"
-        label: "GigabitEthernet0/0"
-        slot: 0
-        type: physical
-      - id: "i1"
-        label: "GigabitEthernet0/1"
-        slot: 1
-        type: physical
-  - id: "n2"
-    label: "Host1"
-    node_definition: "iol-xe"
-    x: -300
-    y: 100
-    configuration: ""
-    interfaces:
-      - id: "i0"
-        label: "Ethernet0/0"
-        slot: 0
-        type: physical
-  - id: "n3"
-    label: "Host2"
-    node_definition: "iol-xe"
-    x: 300
-    y: 100
-    configuration: ""
-    interfaces:
-      - id: "i0"
-        label: "Ethernet0/0"
-        slot: 0
-        type: physical
-
-links:
-  - id: "l0"
-    n1: "n0"
-    i1: "i0"
-    n2: "n1"
-    i2: "i0"
-    label: "l0"
-  - id: "l1"
-    n1: "n0"
-    i1: "i1"
-    n2: "n2"
-    i2: "i0"
-    label: "l1"
-  - id: "l2"
-    n1: "n1"
-    i1: "i1"
-    n2: "n3"
-    i2: "i0"
-    label: "l2"
+1. collect  — 全機器の running-config と show コマンド出力を収集
+2. diagnose — LLM が根本原因を診断
+3. fix      — LLM が差分修正コマンドを生成し configure terminal で投入
+4. verify   — テストを実行（deploy なし）
+5. 全 PASS → 完了レポート / FAIL & リトライ残 → collect に戻る
 ```
 
-### 機器コンフィグ
+**Phase A/B との主な違い**:
 
-### R1
-```
-hostname R1
-!
-interface GigabitEthernet0/0
- ip address 192.168.12.1 255.255.255.0
- no shutdown
-!
-interface GigabitEthernet0/1
- ip address 192.168.10.1 255.255.255.0
- no shutdown
-!
-ip route 192.168.20.0 255.255.255.0 192.168.12.2
-!
-end
-```
-
-### R2
-```
-hostname R2
-!
-interface GigabitEthernet0/0
- ip address 192.168.12.2 255.255.255.0
- no shutdown
-!
-interface GigabitEthernet0/1
- ip address 192.168.20.1 255.255.255.0
- no shutdown
-!
-ip route 192.168.10.0 255.255.255.0 192.168.12.1
-!
-end
-```
-
-### Host1
-```
-hostname Host1
-!
-interface Ethernet0/0
- ip address 192.168.10.2 255.255.255.0
- no shutdown
-!
-ip route 0.0.0.0 0.0.0.0 192.168.10.1
-!
-end
-```
-
-### Host2
-```
-hostname Host2
-!
-interface Ethernet0/0
- ip address 192.168.20.2 255.255.255.0
- no shutdown
-!
-ip route 0.0.0.0 0.0.0.0 192.168.20.1
-!
-end
-```
-
-## 検証テスト結果
-
-| テスト名 | 結果 | 詳細 |
+| 項目 | Phase A（設計・検証） | Phase H（トラブルシューティング） |
 |---|---|---|
-| Verify that R1's GigabitEthernet0/0 interface is up/up. | ✅ PASS | GigabitEthernet0/0: line=up, protocol=up |
-| Verify that R1's GigabitEthernet0/1 interface is up/up. | ✅ PASS | GigabitEthernet0/1: line=up, protocol=up |
-| Verify that R2's GigabitEthernet0/0 interface is up/up. | ✅ PASS | GigabitEthernet0/0: line=up, protocol=up |
-| Check connectivity between Host1 (behind R1) and Host2 (behind R2) to ensure static routing is implemented correctly. | ✅ PASS | ping 192.168.20.2 OK |
-
-すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。
-(agentic-ni) iida@s400win:~/git/agentic-ni$
-```
-
-
-障害試験の例。
-
-```
-(agentic-ni) iida@s400win:~/git/agentic-ni$ agentic-ni demo2 --fault-sim
-プロンプトセット: demo2
-障害シミュレーション: 有効
-
-【要件】
-  ## ネットワーク構成
-
-  - 3台のルーター（R1・R2・R3）をフルメッシュ（三角形）で接続すること
-  - 各リンクで OSPF エリア 0 を構成すること
-  - R1–R2 リンクが断した場合でもR1→R3→R2 の迂回経路でトラフィックが継続するように設計すること
-  - ルータ・ルータ間のOSPFのリンクタイプはpoint-to-pointとして設計すること
-  - OSPFのHello/Deadのタイマー値は3秒/10秒とすること
-
-  ## リンク構成
-
-  | リンク | 接続 | ネットワーク |
-  |---|---|---|
-  | R1–R2 | GE0/0 (R1) ↔ GE0/0 (R2) | 10.0.12.0/30 |
-  | R1–R3 | GE0/1 (R1) ↔ GE0/0 (R3) | 10.0.13.0/30 |
-  | R2–R3 | GE0/1 (R2) ↔ GE0/1 (R3) | 10.0.23.0/30 |
-
-  ## IPアドレス割り当て
-
-  | 機器 | インターフェース | IPアドレス |
-  |---|---|---|
-  | R1 | GigabitEthernet0/0 | 10.0.12.1/30 |
-  | R1 | GigabitEthernet0/1 | 10.0.13.1/30 |
-  | R1 | Loopback0 | 1.1.1.1/32 |
-  | R2 | GigabitEthernet0/0 | 10.0.12.2/30 |
-  | R2 | GigabitEthernet0/1 | 10.0.23.1/30 |
-  | R2 | Loopback0 | 2.2.2.2/32 |
-  | R3 | GigabitEthernet0/0 | 10.0.13.2/30 |
-  | R3 | GigabitEthernet0/1 | 10.0.23.2/30 |
-  | R3 | Loopback0 | 3.3.3.3/32 |
-
-  ## OSPFの設定
-
-  - プロセス番号: 1
-  - エリア: 0 のみ
-  - 全インターフェース（Loopback 含む）を area 0 に参加させること
-  - Router-ID は Loopback0 アドレスを使用すること
-
-  ## 必須検証項目
-
-  - R1・R2・R3 の OSPF ネイバーがそれぞれ 2 つ確立していること
-  - R1 から 2.2.2.2（R2 Loopback）へ ping が通ること
-  - R1 から 3.3.3.3（R3 Loopback）へ ping が通ること
-  - R2 から 3.3.3.3（R3 Loopback）へ ping が通ること
-
-処理を開始します...
-
-既存ラボを検出: agentic-ni-demo2 (ID=8fb6564d-1b70-497a-b0a5-7522c2a6f8ed) → デプロイをスキップして障害検証を実施します
-
-============================================================
-[第1回 / 上限5回]  設計エージェント  (初回設計)
-============================================================
-  >>> LLM にトポロジーとコンフィグを生成させています...
-  [知識ベース] 未インデックス（スキップ）。agentic-ni --rag-index で索引化できます。
-  <<< 設計完了
-
-[第1回 / 上限5回]  検証エージェント  開始
-  [1/4] CML にデプロイ中...
-    既存ラボを再利用（デプロイスキップ）: lab_id=8fb6564d-1b70-497a-b0a5-7522c2a6f8ed
-  [1/4] デプロイ完了 (lab_id=8fb6564d-1b70-497a-b0a5-7522c2a6f8ed)
-  [2/4] テスト計画を立案中...
-  [2/4] テスト計画完了 (6 件)
-  [3/4] テストを実行中...
-        (1/6) R1のOSPFネイバーがR2およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (2/6) R2のOSPFネイバーがR1およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (3/6) R3のOSPFネイバーがR1およびR2と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (4/6) R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 2.2.2.2 OK
-        (5/6) R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-        (6/6) R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-  [4/4] 全テスト PASS
-
-  >>> 全テスト PASS! 最終レポートを生成しています...
-
-============================================================
-[障害シミュレーション]  開始
-============================================================
-  [障害シミュレーション 1/3] CML からリンク一覧を取得中...
-  [障害シミュレーション 2/3] 障害シナリオを LLM に立案させています (3 リンク)...
-  [障害シミュレーション 2/3] 計画完了 (3 シナリオ): R1 <-> R2 のリンクはプライマリ経路として重要であり、断された場合の迂回経路を検証する必要がある。また、R1 <-> R3 と R2 <-> R3 のリンクはコアルーター間接続であり、障害に対する冗長性を確認することが重要である。これにより、全てのリンクが障害を起こした際のネットワークの耐障害性を総合的に評価できる。
-  [障害シミュレーション 3/3] 障害シナリオを実行中...
-
-  ▶ シナリオ 1/3: プライマリリンク断時の迂回経路確認
-    CML リンク DOWN: R1 <-> R2 (15s 待機中...)
-    テスト実行（障害中）:
-        (1/6) [障害中] OSPF ネイバー数確認: R1 （期待値: 1）
-               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
-        (2/6) [障害中] OSPF ネイバー数確認: R2 （期待値: 1）
-               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
-        (3/6) [障害中] R3のOSPFネイバーがR1およびR2と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (4/6) [障害中] R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 2.2.2.2 OK
-        (5/6) [障害中] R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-        (6/6) [障害中] R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-    CML リンク UP（復旧）: R1 <-> R2 (15s 待機中...)
-    テスト実行（復旧後）:
-        (1/6) [復旧後] R1のOSPFネイバーがR2およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (2/6) [復旧後] R2のOSPFネイバーがR1およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (3/6) [復旧後] R3のOSPFネイバーがR1およびR2と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (4/6) [復旧後] R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 2.2.2.2 OK
-        (5/6) [復旧後] R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-        (6/6) [復旧後] R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-    シナリオ結果: ✅ PASS
-
-  ▶ シナリオ 2/3: コア間リンク断時の冗長性確認
-    CML リンク DOWN: R1 <-> R3 (15s 待機中...)
-    テスト実行（障害中）:
-        (1/6) [障害中] OSPF ネイバー数確認: R1 （期待値: 1）
-               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
-        (2/6) [障害中] R2のOSPFネイバーがR1およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (3/6) [障害中] OSPF ネイバー数確認: R3 （期待値: 1）
-               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
-        (4/6) [障害中] R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 2.2.2.2 OK
-        (5/6) [障害中] R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-        (6/6) [障害中] R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-    CML リンク UP（復旧）: R1 <-> R3 (15s 待機中...)
-    テスト実行（復旧後）:
-        (1/6) [復旧後] R1のOSPFネイバーがR2およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (2/6) [復旧後] R2のOSPFネイバーがR1およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (3/6) [復旧後] R3のOSPFネイバーがR1およびR2と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (4/6) [復旧後] R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 2.2.2.2 OK
-        (5/6) [復旧後] R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-        (6/6) [復旧後] R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-    シナリオ結果: ✅ PASS
-
-  ▶ シナリオ 3/3: コア間リンク断時の冗長性確認
-    CML リンク DOWN: R2 <-> R3 (15s 待機中...)
-    テスト実行（障害中）:
-        (1/6) [障害中] R1のOSPFネイバーがR2およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (2/6) [障害中] OSPF ネイバー数確認: R2 （期待値: 1）
-               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
-        (3/6) [障害中] OSPF ネイバー数確認: R3 （期待値: 1）
-               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
-        (4/6) [障害中] R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 2.2.2.2 OK
-        (5/6) [障害中] R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-        (6/6) [障害中] R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-    CML リンク UP（復旧）: R2 <-> R3 (15s 待機中...)
-    テスト実行（復旧後）:
-        (1/6) [復旧後] R1のOSPFネイバーがR2およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (2/6) [復旧後] R2のOSPFネイバーがR1およびR3と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (3/6) [復旧後] R3のOSPFネイバーがR1およびR2と確立していることを確認する。
-               → ✅ PASS  2 neighbor(s) FULL
-        (4/6) [復旧後] R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 2.2.2.2 OK
-        (5/6) [復旧後] R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-        (6/6) [復旧後] R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。
-               → ✅ PASS  ping 3.3.3.3 OK
-    シナリオ結果: ✅ PASS
-
-  [障害シミュレーション 完了] 3/3 シナリオ PASS
-
-  >>> 障害シミュレーションレポートを生成しています...
-# 検証成功レポート
-
-**生成日時**: 2026-07-06 23:11:41
-
-## 要件
-## ネットワーク構成
-
-- 3台のルーター（R1・R2・R3）をフルメッシュ（三角形）で接続すること
-- 各リンクで OSPF エリア 0 を構成すること
-- R1–R2 リンクが断した場合でもR1→R3→R2 の迂回経路でトラフィックが継続するように設計すること
-- ルータ・ルータ間のOSPFのリンクタイプはpoint-to-pointとして設計すること
-- OSPFのHello/Deadのタイマー値は3秒/10秒とすること
-
-## リンク構成
-
-| リンク | 接続 | ネットワーク |
-|---|---|---|
-| R1–R2 | GE0/0 (R1) ↔ GE0/0 (R2) | 10.0.12.0/30 |
-| R1–R3 | GE0/1 (R1) ↔ GE0/0 (R3) | 10.0.13.0/30 |
-| R2–R3 | GE0/1 (R2) ↔ GE0/1 (R3) | 10.0.23.0/30 |
-
-## IPアドレス割り当て
-
-| 機器 | インターフェース | IPアドレス |
-|---|---|---|
-| R1 | GigabitEthernet0/0 | 10.0.12.1/30 |
-| R1 | GigabitEthernet0/1 | 10.0.13.1/30 |
-| R1 | Loopback0 | 1.1.1.1/32 |
-| R2 | GigabitEthernet0/0 | 10.0.12.2/30 |
-| R2 | GigabitEthernet0/1 | 10.0.23.1/30 |
-| R2 | Loopback0 | 2.2.2.2/32 |
-| R3 | GigabitEthernet0/0 | 10.0.13.2/30 |
-| R3 | GigabitEthernet0/1 | 10.0.23.2/30 |
-| R3 | Loopback0 | 3.3.3.3/32 |
-
-## OSPFの設定
-
-- プロセス番号: 1
-- エリア: 0 のみ
-- 全インターフェース（Loopback 含む）を area 0 に参加させること
-- Router-ID は Loopback0 アドレスを使用すること
-
-## 必須検証項目
-
-- R1・R2・R3 の OSPF ネイバーがそれぞれ 2 つ確立していること
-- R1 から 2.2.2.2（R2 Loopback）へ ping が通ること
-- R1 から 3.3.3.3（R3 Loopback）へ ping が通ること
-- R2 から 3.3.3.3（R3 Loopback）へ ping が通ること
-
-## 概要
-- 試行回数: 1 回
-- PASSテスト: 6 件
-- FAILテスト: 0 件
-- ラボID: 8fb6564d-1b70-497a-b0a5-7522c2a6f8ed
-
-## ネットワーク設計
-
-### トポロジー定義（CML YAML）
-```yaml
-lab:
-  title: agentic-ni-demo2
-  description: "Three routers in a full mesh with OSPF"
-  notes: ""
-  timestamp: 0
-  version: "0.1.0"
-
-nodes:
-  - id: "n0"
-    label: "R1"
-    node_definition: "iosv"
-    x: -200
-    y: 0
-    configuration: ""
-    interfaces:
-      - id: "i0"
-        label: "GigabitEthernet0/0"
-        slot: 0
-        type: physical
-      - id: "i1"
-        label: "GigabitEthernet0/1"
-        slot: 1
-        type: physical
-  - id: "n1"
-    label: "R2"
-    node_definition: "iosv"
-    x: 0
-    y: 0
-    configuration: ""
-    interfaces:
-      - id: "i0"
-        label: "GigabitEthernet0/0"
-        slot: 0
-        type: physical
-      - id: "i1"
-        label: "GigabitEthernet0/1"
-        slot: 1
-        type: physical
-  - id: "n2"
-    label: "R3"
-    node_definition: "iosv"
-    x: 200
-    y: 0
-    configuration: ""
-    interfaces:
-      - id: "i0"
-        label: "GigabitEthernet0/0"
-        slot: 0
-        type: physical
-      - id: "i1"
-        label: "GigabitEthernet0/1"
-        slot: 1
-        type: physical
-
-links:
-  - id: "l0"
-    n1: "n0"
-    i1: "i0"
-    n2: "n1"
-    i2: "i0"
-    label: "l0"
-  - id: "l1"
-    n1: "n0"
-    i1: "i1"
-    n2: "n2"
-    i2: "i0"
-    label: "l1"
-  - id: "l2"
-    n1: "n1"
-    i1: "i1"
-    n2: "n2"
-    i2: "i1"
-    label: "l2"
-```
-
-### 機器コンフィグ
-
-### R1
-```
-hostname R1
-!
-interface Loopback0
- ip address 1.1.1.1 255.255.255.255
-!
-interface GigabitEthernet0/0
- ip address 10.0.12.1 255.255.255.252
- ip ospf network point-to-point
- ip ospf hello-interval 3
- ip ospf dead-interval 10
- no shutdown
-!
-interface GigabitEthernet0/1
- ip address 10.0.13.1 255.255.255.252
- ip ospf network point-to-point
- ip ospf hello-interval 3
- ip ospf dead-interval 10
- no shutdown
-!
-router ospf 1
- router-id 1.1.1.1
- network 0.0.0.0 255.255.255.255 area 0
-!
-end
-```
-
-### R2
-```
-hostname R2
-!
-interface Loopback0
- ip address 2.2.2.2 255.255.255.255
-!
-interface GigabitEthernet0/0
- ip address 10.0.12.2 255.255.255.252
- ip ospf network point-to-point
- ip ospf hello-interval 3
- ip ospf dead-interval 10
- no shutdown
-!
-interface GigabitEthernet0/1
- ip address 10.0.23.1 255.255.255.252
- ip ospf network point-to-point
- ip ospf hello-interval 3
- ip ospf dead-interval 10
- no shutdown
-!
-router ospf 1
- router-id 2.2.2.2
- network 0.0.0.0 255.255.255.255 area 0
-!
-end
-```
-
-### R3
-```
-hostname R3
-!
-interface Loopback0
- ip address 3.3.3.3 255.255.255.255
-!
-interface GigabitEthernet0/0
- ip address 10.0.13.2 255.255.255.252
- ip ospf network point-to-point
- ip ospf hello-interval 3
- ip ospf dead-interval 10
- no shutdown
-!
-interface GigabitEthernet0/1
- ip address 10.0.23.2 255.255.255.252
- ip ospf network point-to-point
- ip ospf hello-interval 3
- ip ospf dead-interval 10
- no shutdown
-!
-router ospf 1
- router-id 3.3.3.3
- network 0.0.0.0 255.255.255.255 area 0
-!
-end
-```
-
-## 検証テスト結果
-
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| R1のOSPFネイバーがR2およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R2のOSPFネイバーがR1およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R3のOSPFネイバーがR1およびR2と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 2.2.2.2 OK |
-| R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-| R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-
-すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。
-
----
-
-## 障害シミュレーション結果
-
-- 実施シナリオ数: 3 件
-- PASS（復旧確認）: 3 件
-- FAIL（復旧未確認）: 0 件
-- **判定: ✅ 全シナリオで復旧を確認**
-
-### プライマリリンク断時の迂回経路確認 (R1 <-> R2) — ✅ PASS
-
-**障害中テスト結果**
-
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| OSPF ネイバー数確認: R1 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
-| OSPF ネイバー数確認: R2 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
-| R3のOSPFネイバーがR1およびR2と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 2.2.2.2 OK |
-| R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-| R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-
-**復旧後テスト結果**
-
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| R1のOSPFネイバーがR2およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R2のOSPFネイバーがR1およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R3のOSPFネイバーがR1およびR2と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 2.2.2.2 OK |
-| R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-| R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-
-### コア間リンク断時の冗長性確認 (R1 <-> R3) — ✅ PASS
-
-**障害中テスト結果**
-
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| OSPF ネイバー数確認: R1 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
-| R2のOSPFネイバーがR1およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| OSPF ネイバー数確認: R3 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
-| R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 2.2.2.2 OK |
-| R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-| R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-
-**復旧後テスト結果**
-
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| R1のOSPFネイバーがR2およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R2のOSPFネイバーがR1およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R3のOSPFネイバーがR1およびR2と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 2.2.2.2 OK |
-| R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-| R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-
-### コア間リンク断時の冗長性確認 (R2 <-> R3) — ✅ PASS
-
-**障害中テスト結果**
-
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| R1のOSPFネイバーがR2およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| OSPF ネイバー数確認: R2 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
-| OSPF ネイバー数確認: R3 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
-| R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 2.2.2.2 OK |
-| R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-| R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-
-**復旧後テスト結果**
-
-| テスト名 | 結果 | 詳細 |
-|---|---|---|
-| R1のOSPFネイバーがR2およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R2のOSPFネイバーがR1およびR3と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R3のOSPFネイバーがR1およびR2と確立していることを確認する。 | ✅ PASS | 2 neighbor(s) FULL |
-| R1からR2のLoopback0（2.2.2.2）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 2.2.2.2 OK |
-| R1からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-| R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
-(agentic-ni) iida@s400win:~/git/agentic-ni$
-```
+| 起点 | 自然言語の要件 | 既存ラボ ID + 問題説明 |
+| 修正方式 | wipe + 再デプロイ | `configure terminal` による差分適用 |
+| 主担当エージェント | 設計エージェント + 検証エージェント | トラブルシューターエージェント |
+| ラボ作成 | あり（新規） | なし（既存ラボに接続） |
+
+**実装したコンポーネント**:
+
+| コンポーネント | 内容 |
+|---|---|
+| `troubleshooter.py` | `run_collect` / `run_diagnose` / `run_fix` の 3 関数 |
+| `DiagnosisResult` (Pydantic) | `root_cause` / `affected_devices` / `severity` / `summary` |
+| `FixPlan` / `FixCommand` (Pydantic) | デバイス別修正コマンドと rollback コマンド |
+| `troubleshooter_system.md` | トラブルシューター専用システムプロンプト |
+| `compile_graph_troubleshoot()` | `collect → diagnose → fix → verify` ループグラフ |
+| `initial_state_troubleshoot()` | トラブルシューティングモード用初期ステートファクトリー |
+| `TroubleshootFixRecord` (TypedDict) | 修正履歴レコード（`state.py`） |
+| `tests/test_troubleshooter.py` | ユニットテスト（LLM/CML/pyATS はすべてモック） |
+
+**完了基準**: `--troubleshoot` で既存ラボに接続し、`collect → diagnose → fix → verify` のサイクルが最大 `TROUBLESHOOT_MAX_RETRIES`（デフォルト 3 回）まで繰り返せること。 ✅ 完了（ユニットテスト PASS）
