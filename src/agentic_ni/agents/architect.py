@@ -48,6 +48,18 @@ class DesignOutput(BaseModel):
     )
 
 
+class ConfigOnlyOutput(BaseModel):
+    """コンフィグのみ生成モード用の構造化出力スキーマ（トポロジーは提供済み）。"""
+
+    device_configs: list[DeviceConfig] = Field(
+        description="機器ごとのコンフィグリスト。"
+        "各要素は device_name（ノードlabelと一致）と config_text を持つ。"
+    )
+    design_rationale: str = Field(
+        description="設計意図・選択理由の簡潔な説明（ログ・デバッグ用）。"
+    )
+
+
 # ---------------------------------------------------------------------------
 # プロンプト構築
 # ---------------------------------------------------------------------------
@@ -221,6 +233,66 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
     ]
 
 
+def _build_messages_config_only(state: AgentState) -> list[dict[str, str]]:
+    """コンフィグのみ生成モード用のメッセージを組み立てる。
+
+    トポロジーYAMLは提供済み（state["topology_yaml"]）として、
+    機器コンフィグのみをLLMに生成させる。
+    """
+    system_prompt = _load_system_prompt(state.get("prompt_set", "demo"))
+    topology_yaml = state.get("topology_yaml", "")
+
+    if state.get("error_log"):
+        # --- コンフィグ修正モード ---
+        user_content = (
+            "## コンフィグ修正依頼\n\n"
+            "前回のコンフィグに対して検証エージェントから以下のエラーが報告されました。\n"
+            "**トポロジーYAMLは変更せず、コンフィグのみ修正してください。**\n\n"
+            "### 元の要件\n"
+            f"{state['requirement']}\n\n"
+            "### 提供済みトポロジーYAML（変更禁止）\n"
+            f"```yaml\n{topology_yaml}\n```\n\n"
+            "### 前回の機器コンフィグ\n"
+            + "\n".join(
+                f"**{dev}**:\n```\n{cfg}\n```"
+                for dev, cfg in state.get("device_configs", {}).items()
+            )
+            + "\n\n### エラーログ（検証エージェントの推論含む）\n"
+            f"```\n{state['error_log']}\n```\n\n"
+            "修正点のみ変更し、問題のない箇所はそのまま維持してください。"
+        )
+    else:
+        # --- 初回コンフィグ生成モード ---
+        user_content = (
+            "## コンフィグ生成依頼\n\n"
+            "以下のトポロジーはすでに定義されています。\n"
+            "**トポロジーYAMLは変更せず、各機器のコンフィグのみを生成してください。**\n\n"
+            "### 要件\n"
+            f"{state['requirement']}\n\n"
+            "### 提供済みトポロジーYAML（変更禁止）\n"
+            f"```yaml\n{topology_yaml}\n```\n\n"
+            "上記トポロジーのノードとインターフェース構成に合わせた機器コンフィグを生成してください。"
+        )
+        # --- 知識ベースコンテキスト付与 ---
+        knowledge_context = _build_knowledge_context(state["requirement"])
+        if knowledge_context:
+            user_content += f"\n\n{knowledge_context}"
+            print(
+                "  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。",
+                flush=True,
+            )
+        else:
+            print(
+                "  [知識ベース] 未インデックス（スキップ）。agentic-ni --rag-index で索引化できます。",
+                flush=True,
+            )
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # エージェント実行
 # ---------------------------------------------------------------------------
@@ -249,6 +321,9 @@ def run(state: AgentState) -> dict[str, Any]:
     要件またはエラーログを受け取り、LLMを呼び出して
     トポロジーYAMLと機器コンフィグを生成して返す。
 
+    use_provided_topology=True の場合は topology_yaml を変更せず、
+    機器コンフィグのみを生成する（コンフィグのみモード）。
+
     Args:
         state: 現在のエージェントステート。
 
@@ -258,7 +333,22 @@ def run(state: AgentState) -> dict[str, Any]:
     """
     llm = get_llm()
 
-    # 構造化出力モード（function_calling: dict[str, str] など strict 非対応型を含むため）
+    if state.get("use_provided_topology"):
+        # --- コンフィグのみモード: トポロジーはステートから変更しない ---
+        structured_llm = llm.with_structured_output(ConfigOnlyOutput, method="function_calling")
+        messages = _build_messages_config_only(state)
+        result: ConfigOnlyOutput = structured_llm.invoke(messages)
+
+        if state.get("error_log"):
+            print(f"  【修正方針】 {result.design_rationale}", flush=True)
+
+        return {
+            # topology_yaml はステートの値をそのまま維持（更新しない）
+            "device_configs": {dc.device_name: dc.config_text for dc in result.device_configs},
+            "error_log": "",
+        }
+
+    # --- 通常モード: トポロジーとコンフィグの両方を生成 ---
     structured_llm = llm.with_structured_output(DesignOutput, method="function_calling")
 
     messages = _build_messages(state)

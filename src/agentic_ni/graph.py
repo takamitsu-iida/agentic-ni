@@ -44,7 +44,10 @@ def architect_node(state: AgentState) -> dict:
     print(f"\n{'='*60}", flush=True)
     print(f"[第{trial}回 / 上限{MAX_RETRIES}回]  設計エージェント  ({mode})", flush=True)
     print(f"{'='*60}", flush=True)
-    print("  >>> LLM にトポロジーとコンフィグを生成させています...", flush=True)
+    if state.get("use_provided_topology"):
+        print("  >>> LLM にコンフィグを生成させています（トポロジーは提供済み）...", flush=True)
+    else:
+        print("  >>> LLM にトポロジーとコンフィグを生成させています...", flush=True)
     result = architect.run(state)
     print("  <<< 設計完了", flush=True)
     return result
@@ -912,12 +915,27 @@ def compile_graph_interactive():
     return build_graph(human_in_the_loop=True).compile(checkpointer=MemorySaver())
 
 
+def _load_topology_from_file(prompt_set: str) -> str:
+    """configs/<prompt_set>/topology.yaml からトポロジーYAMLを読み込んで返す。
+
+    ファイルが存在しない場合は FileNotFoundError を送出する。
+    """
+    topology_path = Path("configs") / prompt_set / "topology.yaml"
+    if not topology_path.exists():
+        raise FileNotFoundError(
+            f"トポロジーファイルが見つかりません: {topology_path}\n"
+            f"use_provided_topology=True の場合は configs/{prompt_set}/topology.yaml が必要です。"
+        )
+    return topology_path.read_text(encoding="utf-8")
+
+
 def initial_state(
     requirement: str,
     prompt_set: str = "demo",
     fault_simulation_enabled: bool = False,
     skip_deploy: bool = False,
     lab_id: str = "",
+    use_provided_topology: bool = False,
 ) -> AgentState:
     """初期ステートを生成するファクトリー関数。
 
@@ -927,14 +945,23 @@ def initial_state(
         fault_simulation_enabled: True の場合、Phase A 成功後に障害シミュレーションを実行する。
         skip_deploy: True の場合、検証エージェントのデプロイをスキップし既存ラボを再利用する。
         lab_id: skip_deploy=True 時に指定する既存ラボID。
+        use_provided_topology: True の場合、configs/<prompt_set>/topology.yaml をトポロジーとして
+            使用し、設計エージェントはコンフィグ生成のみ行う。
     """
+    # use_provided_topology=True の場合、ファイルからトポロジーを事前ロード
+    topology_yaml = ""
+    if use_provided_topology:
+        topology_yaml = _load_topology_from_file(prompt_set)
+        print(f"  [トポロジー] configs/{prompt_set}/topology.yaml を読み込みました（コンフィグのみ生成モード）", flush=True)
+
     return AgentState(
         requirement=requirement,
         prompt_set=prompt_set,
+        use_provided_topology=use_provided_topology,
         fault_simulation_enabled=fault_simulation_enabled,
         skip_deploy=skip_deploy,
         error_history=[],
-        topology_yaml="",
+        topology_yaml=topology_yaml,
         device_configs={},
         lab_id=lab_id,
         test_results=[],
@@ -961,7 +988,6 @@ def initial_state(
         live_report="",
         final_report="",
     )
-
 
 def initial_state_analyze(
     lab_id: str,
@@ -2132,6 +2158,7 @@ def main() -> None:
             "オプション:\n"
             "  --list                 利用可能なプロンプトセット一覧を表示して終了する\n"
             "  --dry-run              CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
+            "  --use-topology         configs/<set>/topology.yaml をトポロジーとして使用し、コンフィグのみ生成する\n"
             "  --fault-sim            構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
             "  --troubleshoot [ID]    既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索）\n"
             "  --issue '<説明>'       --troubleshoot と併用する問題の説明（任意）\n"
@@ -2150,6 +2177,7 @@ def main() -> None:
             "  agentic-ni demo                              # demo セットの要件で実行\n"
             "  agentic-ni ospf_l3vpn                        # ospf_l3vpn セットの要件で実行\n"
             "  agentic-ni demo --dry-run                    # CMLなしでコンフィグ生成のみ\n"
+            "  agentic-ni demo3 --use-topology --dry-run    # 手動作成トポロジーYAMLを使いコンフィグのみ生成\n"
             "  agentic-ni demo2 --fault-sim                 # 障害シミュレーションありで実行\n"
             "  agentic-ni demo2 --troubleshoot              # demo2 ラボを自動検索しトラブルシュート\n"
             "  agentic-ni demo2 --troubleshoot abc-1234     # lab_id を明示してトラブルシュート\n"
@@ -2209,6 +2237,7 @@ def main() -> None:
 
     dry_run = "--dry-run" in args
     fault_simulation_enabled = "--fault-sim" in args
+    use_provided_topology: bool = "--use-topology" in args
     troubleshoot_mode: bool = "--troubleshoot" in args
     analyze_mode: bool = "--analyze" in args
     improve_mode: bool = "--improve" in args
@@ -2270,6 +2299,8 @@ def main() -> None:
     print(f"プロンプトセット: {prompt_set}")
     if dry_run:
         print("モード: ドライラン（CMLデプロイなし）")
+    if use_provided_topology:
+        print(f"トポロジー: configs/{prompt_set}/topology.yaml を使用（コンフィグのみ生成モード）")
     if fault_simulation_enabled:
         print("障害シミュレーション: 有効")
     if troubleshoot_mode:
@@ -2362,6 +2393,17 @@ def main() -> None:
 
     app = compile_graph_dry_run() if dry_run else compile_graph()
 
+    # --use-topology: トポロジーファイルの存在チェック
+    if use_provided_topology:
+        topology_path = Path("configs") / prompt_set / "topology.yaml"
+        if not topology_path.exists():
+            print(
+                f"エラー: --use-topology が指定されましたが、トポロジーファイルが見つかりません。\n"
+                f"  期待パス: {topology_path}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     # --fault-sim 時に同名ラボが既存かどうか確認し、あればデプロイをスキップ
     skip_deploy = False
     existing_lab_id = ""
@@ -2377,7 +2419,7 @@ def main() -> None:
         except Exception:  # noqa: BLE001
             pass  # CML 未接続時は無視して通常フローへ
 
-    result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id))
+    result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id, use_provided_topology))
     print(result.get("final_report", "(レポートなし)"))
 
     # Phase I: 実機適用モード（--apply-to-live 指定時）
