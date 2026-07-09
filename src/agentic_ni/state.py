@@ -71,6 +71,10 @@ class AgentState(TypedDict):
     use_rag: bool
     """過去の成功事例をベクトルRAGで検索して設計エージェントのプロンプトに追加するかどうか。"""
 
+    use_provided_topology: bool
+    """True の場合、configs/<prompt_set>/topology.yaml をトポロジーとして使用し、
+    設計エージェントはコンフィグ生成のみ行う（トポロジーYAMLを生成しない）。"""
+
     error_history: list[str]
     """今回の実行中に発生した error_log の履歴。成功時にRAGストアに保存するために使用。"""
 
