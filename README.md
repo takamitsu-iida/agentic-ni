@@ -104,6 +104,7 @@ agentic-ni/
 │           ├── troubleshooter_system.md   # トラブルシューティング 共通プロンプト
 │           ├── demo/                       # R1-R2 OSPF+iBGP
 │           ├── demo2/                      # R1-R2-R3 フルメッシュ（障害シミュレーション用）
+│           ├── demo3/                      # R1-R2 eBGP（手動トポロジーYAML使用・コンフィグのみ生成）
 │           └── <セット名>/                # 任意で追加可能（例: ospf_l3vpn/）
 │
 └── tests/
@@ -1088,6 +1089,7 @@ CLI 引数として要件テキストを渡すことはできません。
 | ------------------------ | ---------------------------------------------------------------------------- |
 | `--list`                 | 利用可能なプロンプトセット一覧を表示して終了する                             |
 | `--dry-run`              | CML デプロイをスキップして設計・コンフィグ生成のみ行う（CML 不要）           |
+| `--use-topology`         | `configs/<set>/topology.yaml` をトポロジーとして使用し、コンフィグのみ生成する |
 | `--fault-sim`            | 全テスト PASS 後に障害シミュレーション（リンク断・復旧・再テスト）を実行する |
 | `--troubleshoot [ID]`    | 既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索）                    |
 | `--issue '<説明>'`       | `--troubleshoot` と併用する問題の説明（任意）                                |
@@ -1234,6 +1236,45 @@ agentic-ni --rag-stats
 
 ---
 
+#### 8. トポロジー提供済みコンフィグ生成モード — 手動作成のトポロジーYAMLを使用
+
+```bash
+# 手動作成したトポロジーYAMLを使い、コンフィグのみ生成（ドライラン）
+agentic-ni demo3 --use-topology --dry-run
+
+# CML環境でフル実行（コンフィグ生成 → CMLデプロイ → 検証）
+agentic-ni demo3 --use-topology
+```
+
+`configs/<プロンプトセット名>/topology.yaml` に手動で作成した CML トポロジー定義を配置しておくと、AIはトポロジーを生成せず **機器コンフィグのみ**を生成します。
+
+**通常モードとの違い**:
+
+| 項目             | 通常モード                           | `--use-topology` モード                       |
+| ---------------- | ------------------------------------ | --------------------------------------------- |
+| トポロジー       | AI が自動生成                        | `configs/<set>/topology.yaml` を使用          |
+| コンフィグ       | AI が生成                            | AI が生成                                     |
+| リトライ時       | トポロジー・コンフィグの両方を修正   | コンフィグのみ修正（トポロジーは変更しない）  |
+| 用途             | ゼロからの自動設計                   | 既存/手動設計したトポロジーへのコンフィグ適用 |
+
+**demo3 セットの内容**（R1-R2 eBGP、AS 65001 ↔ AS 65002）:
+
+```
+configs/demo3/
+  topology.yaml     ← 手動作成済み（R1-R2 直結、GigabitEthernet0/0 × 1リンク）
+
+prompts/demo3/
+  requirement.md    ← eBGP 設定要件
+  architect.md      ← トポロジー提供済み・コンフィグのみ生成の指示
+  validator.md      ← BGP セッション確立・ping の検証仕様
+```
+
+**任意のプロンプトセットで使う場合**:
+
+`configs/<セット名>/topology.yaml` を手動で作成して `--use-topology` を付けるだけで、同じコンフィグのみ生成モードが使えます。
+
+---
+
 ### プロンプトセットの追加方法
 
 ネットワーク要件の種類に合わせてプロンプトセットを追加できます。
@@ -1320,6 +1361,30 @@ result = app.invoke(initial_state_improve(
     lab_id="abc-1234",
     analyze_request="OSPF に BFD を追加したい",
     prompt_set="demo",
+))
+print(result["final_report"])
+```
+
+#### トポロジー提供済みコンフィグ生成モード
+
+```python
+from agentic_ni.graph import compile_graph, compile_graph_dry_run, initial_state
+
+# CMLへデプロイして検証まで実行
+app = compile_graph()
+result = app.invoke(initial_state(
+    requirement="...",
+    prompt_set="demo3",
+    use_provided_topology=True,  # configs/demo3/topology.yaml を使用
+))
+print(result["final_report"])
+
+# ドライラン（コンフィグ生成のみ）
+app = compile_graph_dry_run()
+result = app.invoke(initial_state(
+    requirement="...",
+    prompt_set="demo3",
+    use_provided_topology=True,
 ))
 print(result["final_report"])
 ```
