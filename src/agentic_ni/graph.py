@@ -24,7 +24,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
 from agentic_ni.agents import architect, analyzer, fault_simulator, troubleshooter, validator
-from agentic_ni.state import AgentState, FaultScenarioResult, LiveApplyRecord
+from agentic_ni.state import AgentState, FaultScenarioResult, LiveApplyRecord, load_device_configs
 
 load_dotenv()
 
@@ -74,7 +74,7 @@ def report_node(state: AgentState) -> dict:
     )
 
     # 機器コンフィグのセクション
-    device_configs: dict[str, str] = state.get("device_configs", {})
+    device_configs = load_device_configs(state)
     config_section = "\n\n".join(
         f"### {dev}\n```\n{cfg.strip()}\n```"
         for dev, cfg in device_configs.items()
@@ -246,7 +246,7 @@ def _generate_design_docs(state: AgentState, out_dir: Path) -> str:
     Returns:
         str: final_report に追記する Markdown テキスト。
     """
-    device_configs: dict[str, str] = state.get("device_configs", {})
+    device_configs = load_device_configs(state)
     topology_yaml: str = state.get("topology_yaml", "")
     out_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
@@ -493,10 +493,10 @@ def escalate_node(state: AgentState) -> dict:
     ) or "| (テスト未実施) | - | - |"
 
     # 機器コンフィグのセクション
-    device_configs: dict[str, str] = state.get("device_configs", {})
+    device_configs_esc = load_device_configs(state)
     config_section = "\n\n".join(
         f"### {dev}\n```\n{cfg.strip()}\n```"
-        for dev, cfg in device_configs.items()
+        for dev, cfg in device_configs_esc.items()
     ) or "(コンフィグなし)"
 
     report = (
@@ -664,7 +664,7 @@ def compile_graph():
 def dry_run_node(state: AgentState) -> dict:
     """Phase C/D: ドライランモードの出力ノード。設計結果を表示しファイルに保存する。"""
     topology_yaml: str = state.get("topology_yaml", "")
-    device_configs: dict[str, str] = state.get("device_configs", {})
+    device_configs_dry = load_device_configs(state)
     prompt_set: str = state.get("prompt_set", "demo")
 
     out_dir = Path("configs") / prompt_set
@@ -674,7 +674,7 @@ def dry_run_node(state: AgentState) -> dict:
 
     device_section = "\n\n".join(
         f"### {dev}\n```\n{cfg.strip()}\n```"
-        for dev, cfg in device_configs.items()
+        for dev, cfg in device_configs_dry.items()
     ) or "(コンフィグなし)"
 
     report = (
@@ -734,7 +734,7 @@ def troubleshoot_verify_node(state: AgentState) -> dict:
 
     testbed_yaml = pyats_tools.build_testbed(
         state.get("lab_id", ""),
-        state.get("device_configs", {}),
+        load_device_configs(state),
     )
     test_results = []
     for i, item in enumerate(plan.tests, 1):
@@ -866,11 +866,13 @@ def initial_state_troubleshoot(
         error_history=[],
         topology_yaml="",
         device_configs={},
+        device_config_paths={},
         lab_id=lab_id,
         test_results=[],
         test_plan_items=[],
         error_log="",
         retry_count=0,
+        failed_devices=[],
         fault_scenario_results=[],
         fault_report="",
         # トラブルシューティング固有
@@ -963,11 +965,13 @@ def initial_state(
         error_history=[],
         topology_yaml=topology_yaml,
         device_configs={},
+        device_config_paths={},
         lab_id=lab_id,
         test_results=[],
         test_plan_items=[],
         error_log="",
         retry_count=0,
+        failed_devices=[],
         fault_scenario_results=[],
         fault_report="",
         troubleshoot_lab_id="",
@@ -1011,11 +1015,13 @@ def initial_state_analyze(
         error_history=[],
         topology_yaml="",
         device_configs={},
+        device_config_paths={},
         lab_id=lab_id,
         test_results=[],
         test_plan_items=[],
         error_log="",
         retry_count=0,
+        failed_devices=[],
         fault_scenario_results=[],
         fault_report="",
         troubleshoot_lab_id=lab_id,
@@ -1062,11 +1068,13 @@ def initial_state_improve(
         error_history=[],
         topology_yaml="",
         device_configs={},
+        device_config_paths={},
         lab_id=lab_id,
         test_results=[],
         test_plan_items=[],
         error_log="",
         retry_count=0,
+        failed_devices=[],
         fault_scenario_results=[],
         fault_report="",
         troubleshoot_lab_id=lab_id,
@@ -1497,7 +1505,7 @@ def live_apply_node(state: AgentState) -> dict:
     from agentic_ni.tools import pyats_tools
 
     records: list[LiveApplyRecord] = list(state.get("live_apply_records", []))
-    device_configs: dict[str, str] = state.get("device_configs", {})
+    device_configs = load_device_configs(state)
 
     print(f"\n{'='*60}", flush=True)
     print("[Phase I] 実機コンフィグ投入 開始", flush=True)
@@ -2013,11 +2021,13 @@ def initial_state_apply_to_live(
         error_history=[],
         topology_yaml="",
         device_configs={},
+        device_config_paths={},
         lab_id=lab_id,
         test_results=[],
         test_plan_items=[],
         error_log="",
         retry_count=0,
+        failed_devices=[],
         fault_scenario_results=[],
         fault_report="",
         troubleshoot_lab_id="",

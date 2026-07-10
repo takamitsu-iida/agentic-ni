@@ -5,15 +5,21 @@ CMLへのデプロイ・テスト実行・失敗推論を行う LangGraph ノー
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from agentic_ni.llm import get_llm
-from agentic_ni.state import AgentState, TestResult
+from agentic_ni.state import AgentState, TestResult, load_device_configs
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+
+# テスト並列実行の最大ワーカー数（環境変数 MAX_TEST_WORKERS で上書き可能）。
+# 1 を指定すると逐次実行（デバッグ・接続安定性優先）になる。
+MAX_TEST_WORKERS: int = int(os.getenv("MAX_TEST_WORKERS", "8"))
 
 # ---------------------------------------------------------------------------
 # Pydantic スキーマ
@@ -66,6 +72,13 @@ class FailureAnalysis(BaseModel):
         description="設計エージェントへの修正依頼。"
         "どのデバイスのどの設定を変更すべきかを具体的に記述する。"
     )
+    affected_devices: list[str] = Field(
+        description=(
+            "コンフィグの修正が必要なデバイス名のリスト。"
+            "直接 FAIL したデバイスだけでなく、原因となっている設定ミスを持つデバイスを含めること。"
+            "例: ['R1', 'R3']。全デバイスが対象の場合は空リスト [] を返す。"
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +128,13 @@ def list_prompt_sets() -> list[str]:
 def _build_test_plan_messages(state: AgentState) -> list[dict[str, str]]:
     """テスト計画立案用のメッセージを組み立てる。"""
     system_prompt = _load_system_prompt(state.get("prompt_set", "demo"))
-    nodes_info = "\n".join(
-        f"- {dev}" for dev in state.get("device_configs", {}).keys()
+    # Strategy E: device_config_paths が設定されていればそこからデバイス名を取得
+    device_names = list(
+        state.get("device_config_paths", {}).keys()  # type: ignore[typeddict-item]
+        or state.get("device_configs", {}).keys()
     )
+    nodes_info = "\n".join(f"- {dev}" for dev in device_names)
+
     user_content = (
         "## テスト計画立案依頼\n\n"
         "以下の要件と設計内容に対して、検証すべきテスト計画を作成してください。\n\n"
@@ -143,7 +160,7 @@ def _build_analysis_messages(
     )
     configs_text = "\n".join(
         f"**{dev}**:\n```\n{cfg}\n```"
-        for dev, cfg in state.get("device_configs", {}).items()
+        for dev, cfg in load_device_configs(state).items()
     )
     user_content = (
         "## 失敗分析依頼\n\n"
@@ -281,6 +298,63 @@ def _execute_test(item: TestItem, testbed_yaml: str) -> TestResult:
 
 
 # ---------------------------------------------------------------------------
+# テスト実行（逐次 / 並列）
+# ---------------------------------------------------------------------------
+
+
+def _run_tests(plan: TestPlan, testbed_yaml: str) -> list[TestResult]:
+    """テスト計画を実行し、元の順序で TestResult リストを返す（Strategy D: 並列実行）。
+
+    ``MAX_TEST_WORKERS`` が 1 の場合、または計画が 1 件以下の場合は逐次実行する。
+    それ以外は ``ThreadPoolExecutor`` で同時実行し、完了したテストから都度ログを出力する。
+    結果は常に ``plan.tests`` の元の順序で返す。
+
+    同一デバイスへの並列接続が問題になる場合は環境変数 ``MAX_TEST_WORKERS=1`` で
+    逐次実行に切り替えられる。
+
+    Args:
+        plan: LLM が生成したテスト計画。
+        testbed_yaml: pyATS テストベッド YAML 文字列。
+
+    Returns:
+        list[TestResult]: ``plan.tests`` と同じ順序のテスト結果リスト。
+    """
+    total = len(plan.tests)
+    workers = MAX_TEST_WORKERS
+
+    if workers <= 1 or total <= 1:
+        # --- 逐次実行（従来動作 / デバッグモード）---
+        results: list[TestResult] = []
+        for i, item in enumerate(plan.tests, 1):
+            print(f"        ({i}/{total}) {item.description}", flush=True)
+            result = _execute_test(item, testbed_yaml)
+            mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
+            print(f"               → {mark}  {result['detail']}", flush=True)
+            results.append(result)
+        return results
+
+    # --- 並列実行 ---
+    results_by_index: dict[int, TestResult] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_index = {
+            executor.submit(_execute_test, item, testbed_yaml): i
+            for i, item in enumerate(plan.tests)
+        }
+        for future in as_completed(future_to_index):
+            idx = future_to_index[future]
+            item = plan.tests[idx]
+            result = future.result()
+            results_by_index[idx] = result
+            mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
+            print(
+                f"        [{idx + 1}/{total}] {item.description} → {mark}  {result['detail']}",
+                flush=True,
+            )
+
+    return [results_by_index[i] for i in range(total)]
+
+
+# ---------------------------------------------------------------------------
 # デプロイ処理
 # ---------------------------------------------------------------------------
 
@@ -300,7 +374,7 @@ def _deploy(state: AgentState) -> str:
             return existing_id
 
     topology_yaml = state.get("topology_yaml", "")
-    device_configs = state.get("device_configs", {})
+    device_configs = load_device_configs(state)
 
     # 既存ラボがあれば、まずコンフィグ更新・再起動を試みる（トポロジー再作成なし）
     old_lab_id = state.get("lab_id", "")
@@ -364,17 +438,12 @@ def run(state: AgentState) -> dict[str, Any]:
     # --- 3. テストベッド取得 ---
     from agentic_ni.tools import pyats_tools
 
-    testbed_yaml = pyats_tools.build_testbed(lab_id, state.get("device_configs", {}))
+    testbed_yaml = pyats_tools.build_testbed(lab_id, load_device_configs(state))
 
     # --- 4. テスト実行 ---
-    print(f"  [3/4] テストを実行中...", flush=True)
-    test_results: list[TestResult] = []
-    for i, item in enumerate(plan.tests, 1):
-        print(f"        ({i}/{len(plan.tests)}) {item.description}", flush=True)
-        result = _execute_test(item, testbed_yaml)
-        mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
-        print(f"               → {mark}  {result['detail']}", flush=True)
-        test_results.append(result)
+    mode_label = "逐次" if MAX_TEST_WORKERS <= 1 else f"並列 最大 {MAX_TEST_WORKERS} workers"
+    print(f"  [3/4] テストを実行中... ({mode_label})", flush=True)
+    test_results = _run_tests(plan, testbed_yaml)
 
     # --- 5. 失敗分析 ---
     failed = [r for r in test_results if r["result"] == "FAIL"]
@@ -410,4 +479,5 @@ def run(state: AgentState) -> dict[str, Any]:
         "error_log": error_log,
         "error_history": error_history,
         "retry_count": new_retry_count,
+        "failed_devices": analysis.affected_devices if failed else [],
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TypedDict
 
 
@@ -83,7 +84,13 @@ class AgentState(TypedDict):
     """CMLに読み込ませるトポロジー定義（YAML文字列）。"""
 
     device_configs: dict[str, str]
-    """機器ごとのコンフィグテキスト。キーはデバイス名。例: {"R1": "hostname R1\\n..."}"""
+    """機器ごとのコンフィグテキスト。キーはデバイス名。例: {"R1": "hostname R1\\n..."}
+    Strategy E 適用後は {} になる（コンフィグはファイルに書き出され、device_config_paths にパスが格納される）"""
+
+    device_config_paths: dict[str, str]
+    """デバイス名 → コンフィグファイルパスのマッピング（Strategy E: 設定の外部化）。
+    architect.run() がコンフィグをファイルに書き出した後に設定される。
+    空の場合は device_configs からフォールバックする（後方互換）。例: {"R1": "configs/demo/R1.cfg"}"""
 
     # --- 検証エージェント出力 ---
     lab_id: str
@@ -98,6 +105,11 @@ class AgentState(TypedDict):
 
     error_log: str
     """失敗時の詳細ログ（原因推論を含む）。設計エージェントへのフィードバックに使用。"""
+
+    failed_devices: list[str]
+    """直近のテスト失敗で修正が必要と判断されたデバイス名のリスト（Strategy B: 差分リトライ）。
+    空リストの場合は全デバイスを再設計する。設計エージェントはこのリストに含まれる
+    デバイスのコンフィグのみ再生成し、残りは前回の結果を流用する。"""
 
     # --- ループ管理 ---
     retry_count: int
@@ -172,3 +184,58 @@ class AgentState(TypedDict):
     # --- 最終出力 ---
     final_report: str
     """全PASS時またはエスカレーション時に生成される最終レポート。"""
+
+
+# ---------------------------------------------------------------------------
+# Strategy E: 設定の外部化ユーティリティ
+# ---------------------------------------------------------------------------
+
+
+def write_device_configs(device_configs: dict[str, str], prompt_set: str) -> dict[str, str]:
+    """デバイスコンフィグをファイルシステムに書き出し、パスマッピングを返す（Strategy E）。
+
+    ``configs/<prompt_set>/`` ディレクトリを作成し、各デバイスのコンフィグを
+    ``<device>.cfg`` ファイルに書き出す。以降の AgentState では ``device_configs`` を
+    空にして ``device_config_paths`` だけ保持することで、LangGraph のステートサイズを
+    削減できる。
+
+    Args:
+        device_configs: デバイス名 → コンフィグテキストのマッピング。
+        prompt_set: プロンプトセット名（ディレクトリ名として使用）。
+
+    Returns:
+        dict[str, str]: デバイス名 → ファイルパス（文字列）のマッピング。
+    """
+    out_dir = Path("configs") / prompt_set
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, str] = {}
+    for device, config in device_configs.items():
+        cfg_path = out_dir / f"{device}.cfg"
+        cfg_path.write_text(config, encoding="utf-8")
+        paths[device] = str(cfg_path)
+    return paths
+
+
+def load_device_configs(state: AgentState) -> dict[str, str]:
+    """AgentState からデバイスコンフィグを取得する（Strategy E）。
+
+    ``device_config_paths`` が設定されている場合はファイルから読み込む。
+    ファイルが存在しない場合や ``device_config_paths`` が空の場合は
+    ``device_configs`` にフォールバックする（後方互換）。
+
+    Args:
+        state: 現在のエージェントステート。
+
+    Returns:
+        dict[str, str]: デバイス名 → コンフィグテキストのマッピング。
+    """
+    paths: dict[str, str] = state.get("device_config_paths", {})  # type: ignore[typeddict-item]
+    if paths:
+        loaded: dict[str, str] = {}
+        for dev, path_str in paths.items():
+            p = Path(path_str)
+            if p.exists():
+                loaded[dev] = p.read_text(encoding="utf-8")
+        if loaded:
+            return loaded
+    return dict(state.get("device_configs", {}))  # type: ignore[typeddict-item]

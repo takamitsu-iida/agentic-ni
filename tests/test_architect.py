@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from agentic_ni.agents.architect import DesignOutput, DeviceConfig, _build_messages, run
-from agentic_ni.state import AgentState
+from agentic_ni.state import AgentState, load_device_configs, write_device_configs
 
 
 # ---------------------------------------------------------------------------
@@ -180,19 +181,44 @@ class TestArchitectRun:
         mock_llm.with_structured_output.return_value = mock_structured
         return mock_llm
 
-    def test_run_returns_topology_and_configs(self):
+    def test_run_returns_topology_and_configs(self, tmp_path, monkeypatch):
+        """Strategy E: device_config_paths が設定され、ファイルが書き出されること。"""
+        # write_device_configs がファイルを書き出す先を tmp_path に向ける
+        monkeypatch.chdir(tmp_path)
         state = _base_state(requirement="R1とR2をOSPFで接続")
         mock_llm = self._mock_llm(_SAMPLE_DESIGN_OUTPUT)
 
         with patch("agentic_ni.agents.architect.get_llm", return_value=mock_llm):
             result = run(state)
 
-        # ラボ名が agentic-ni-<prompt_set> に上書きされていること
+        # topology_yaml はラボ名が書き換えられること
         assert "agentic-ni-" in result["topology_yaml"]
-        # その他のYAML構造は保持されていること
-        assert "label: R1" in result["topology_yaml"] or "label: 'R1'" in result["topology_yaml"]
-        assert result["device_configs"]["R1"] == _SAMPLE_CONFIGS["R1"]
-        assert result["device_configs"]["R2"] == _SAMPLE_CONFIGS["R2"]
+        # Strategy E: device_configs は空になる
+        assert result["device_configs"] == {}
+        # Strategy E: device_config_paths にパスが設定される
+        assert "R1" in result["device_config_paths"]
+        assert "R2" in result["device_config_paths"]
+        # 実際にファイルが書き出されること
+        r1_path = Path(result["device_config_paths"]["R1"])
+        assert r1_path.exists()
+        assert r1_path.read_text(encoding="utf-8") == _SAMPLE_CONFIGS["R1"]
+
+    def test_load_device_configs_reads_from_paths(self, tmp_path, monkeypatch):
+        """load_device_configs が device_config_paths からファイルを読み込めること。"""
+        monkeypatch.chdir(tmp_path)
+        # ファイルを書き出してパスを取得
+        paths = write_device_configs(_SAMPLE_CONFIGS, "demo")
+        # device_configs が空でも device_config_paths からロードできること
+        state = _base_state(device_configs={}, device_config_paths=paths)
+        loaded = load_device_configs(state)
+        assert loaded["R1"] == _SAMPLE_CONFIGS["R1"]
+        assert loaded["R2"] == _SAMPLE_CONFIGS["R2"]
+
+    def test_load_device_configs_fallback_to_memory(self):
+        """device_config_paths が空の場合は device_configs からフォールバックすること。"""
+        state = _base_state(device_configs=_SAMPLE_CONFIGS)
+        loaded = load_device_configs(state)
+        assert loaded["R1"] == _SAMPLE_CONFIGS["R1"]
 
     def test_run_clears_error_log(self):
         """修正設計出力後にerror_logがクリアされること。"""

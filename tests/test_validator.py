@@ -14,6 +14,7 @@ from agentic_ni.agents.validator import (
     _build_test_plan_messages,
     _deploy,
     _execute_test,
+    _run_tests,
     run,
 )
 from agentic_ni.state import AgentState, TestResult
@@ -116,6 +117,7 @@ class TestSchemas:
         analysis = FailureAnalysis(
             root_cause="OSPFエリア番号のミスマッチ",
             suggestion="R2の router ospf 1 / network ... area 0 に修正",
+            affected_devices=["R2"],
         )
         assert "ミスマッチ" in analysis.root_cause
 
@@ -338,6 +340,7 @@ class TestValidatorRun:
         analysis = FailureAnalysis(
             root_cause="OSPFエリア番号のミスマッチ: R1はarea 0だがR2はarea 1",
             suggestion="R2の設定を area 0 に修正してください",
+            affected_devices=["R2"],
         )
         mock_llm = _make_llm_mock(plan, analysis)
 
@@ -395,3 +398,135 @@ class TestValidatorRun:
             run(_base_state())
 
         mock_llm.with_structured_output.assert_any_call(TestPlan, method="function_calling")
+
+
+# ---------------------------------------------------------------------------
+# _run_tests（Strategy D: テスト並列実行）
+# ---------------------------------------------------------------------------
+
+
+def _pass_result(description: str = "test") -> TestResult:
+    return TestResult(test=description, result="PASS", detail="OK")
+
+
+def _fail_result(description: str = "test") -> TestResult:
+    return TestResult(test=description, result="FAIL", detail="NG")
+
+
+class TestRunTests:
+    """_run_tests() の逐次・並列両モードのテスト。"""
+
+    def _make_items(self, n: int) -> list[TestItem]:
+        return [
+            _make_test_item("ospf_neighbors", f"R{i + 1}", description=f"OSPF R{i + 1}")
+            for i in range(n)
+        ]
+
+    # ------------------------------------------------------------------
+    # 逐次モード（MAX_TEST_WORKERS=1）
+    # ------------------------------------------------------------------
+
+    def test_sequential_returns_results_in_order(self, monkeypatch):
+        """逐次モードで結果が plan.tests と同じ順序で返ること。"""
+        monkeypatch.setattr("agentic_ni.agents.validator.MAX_TEST_WORKERS", 1)
+        items = self._make_items(3)
+        plan = TestPlan(tests=items, rationale="test")
+        expected = [_pass_result(f"OSPF R{i + 1}") for i in range(3)]
+
+        with patch("agentic_ni.agents.validator._execute_test", side_effect=expected):
+            results = _run_tests(plan, "testbed_yaml")
+
+        assert [r["test"] for r in results] == [f"OSPF R{i + 1}" for i in range(3)]
+
+    def test_sequential_calls_execute_test_for_each_item(self, monkeypatch):
+        """逐次モードで _execute_test が全テスト分呼ばれること。"""
+        monkeypatch.setattr("agentic_ni.agents.validator.MAX_TEST_WORKERS", 1)
+        items = self._make_items(3)
+        plan = TestPlan(tests=items, rationale="test")
+
+        mock_exec = MagicMock(side_effect=[_pass_result(f"OSPF R{i + 1}") for i in range(3)])
+        with patch("agentic_ni.agents.validator._execute_test", mock_exec):
+            _run_tests(plan, "testbed_yaml")
+
+        assert mock_exec.call_count == 3
+
+    def test_single_item_uses_sequential_path(self, monkeypatch):
+        """テストが 1 件の場合は workers 設定に関わらず逐次実行されること。"""
+        monkeypatch.setattr("agentic_ni.agents.validator.MAX_TEST_WORKERS", 8)
+        items = self._make_items(1)
+        plan = TestPlan(tests=items, rationale="test")
+        expected = [_pass_result("OSPF R1")]
+
+        with patch("agentic_ni.agents.validator._execute_test", side_effect=expected):
+            results = _run_tests(plan, "testbed_yaml")
+
+        assert len(results) == 1
+        assert results[0]["result"] == "PASS"
+
+    # ------------------------------------------------------------------
+    # 並列モード（MAX_TEST_WORKERS=8）
+    # ------------------------------------------------------------------
+
+    def test_parallel_returns_results_in_original_order(self, monkeypatch):
+        """並列モードで結果が plan.tests の元の順序で返ること。"""
+        monkeypatch.setattr("agentic_ni.agents.validator.MAX_TEST_WORKERS", 4)
+        n = 5
+        items = self._make_items(n)
+        plan = TestPlan(tests=items, rationale="test")
+        # 各テストが確実に対応するデバイス名で返るようにする
+        expected_by_item = {
+            item.description: _pass_result(item.description) for item in items
+        }
+
+        def fake_execute(item: TestItem, _: str) -> TestResult:
+            return expected_by_item[item.description]
+
+        with patch("agentic_ni.agents.validator._execute_test", side_effect=fake_execute):
+            results = _run_tests(plan, "testbed_yaml")
+
+        assert len(results) == n
+        for i, result in enumerate(results):
+            assert result["test"] == f"OSPF R{i + 1}"
+
+    def test_parallel_calls_execute_test_for_all_items(self, monkeypatch):
+        """並列モードで _execute_test が全テスト分呼ばれること。"""
+        monkeypatch.setattr("agentic_ni.agents.validator.MAX_TEST_WORKERS", 4)
+        n = 4
+        items = self._make_items(n)
+        plan = TestPlan(tests=items, rationale="test")
+
+        call_count = 0
+
+        def fake_execute(item: TestItem, _: str) -> TestResult:
+            nonlocal call_count
+            call_count += 1
+            return _pass_result(item.description)
+
+        with patch("agentic_ni.agents.validator._execute_test", side_effect=fake_execute):
+            results = _run_tests(plan, "testbed_yaml")
+
+        assert call_count == n
+        assert len(results) == n
+
+    def test_parallel_fail_results_preserved(self, monkeypatch):
+        """並列モードで FAIL 結果が正しく保持されること。"""
+        monkeypatch.setattr("agentic_ni.agents.validator.MAX_TEST_WORKERS", 4)
+        items = self._make_items(3)
+        plan = TestPlan(tests=items, rationale="test")
+        # 2 番目のテストだけ FAIL
+        outcomes = [
+            _pass_result("OSPF R1"),
+            _fail_result("OSPF R2"),
+            _pass_result("OSPF R3"),
+        ]
+
+        def fake_execute(item: TestItem, _: str) -> TestResult:
+            idx = int(item.device[1]) - 1
+            return outcomes[idx]
+
+        with patch("agentic_ni.agents.validator._execute_test", side_effect=fake_execute):
+            results = _run_tests(plan, "testbed_yaml")
+
+        assert results[0]["result"] == "PASS"
+        assert results[1]["result"] == "FAIL"
+        assert results[2]["result"] == "PASS"

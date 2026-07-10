@@ -2094,3 +2094,186 @@ Human 確認画面:
 
 
 **完了基準**: `--apply-to-live` で CML 検証済みコンフィグが実機に投入され、適用前バックアップと適用後テスト結果を含むレポートが出力されること。
+
+<br>
+
+---
+
+<br>
+
+### Phase S — スケーラビリティ強化
+
+**目標**: 中規模・大規模ネットワーク（30〜100+ ノード）に対応できるよう、LLM コンテキスト消費・デプロイ時間・テスト実行時間のボトルネックを段階的に解消します。
+
+#### 現状のボトルネック
+
+| ボトルネック | 課題 | 対象ファイル |
+|---|---|---|
+| LLM コンテキスト上限 | 全デバイスコンフィグを 1 プロンプトに結合 → 128K トークン超え | `architect.py` |
+| モノリシックなリトライ | 1 テスト失敗 → 全トポロジー + 全コンフィグを再生成 | `architect.py`, `validator.py` |
+| 固定タイムアウト | `deploy_lab()` の 300 秒は 30 台超のラボで不足 | `cml_tools.py` |
+| 逐次テスト実行 | テスト件数に比例して検証時間が線形増加 | `validator.py` |
+| State の肥大化 | `device_configs` dict がメモリに蓄積 | `state.py` |
+
+#### 戦略一覧と進捗
+
+| 優先度 | 戦略 | 概要 | 実装コスト | 進捗 |
+|---|---|---|---|---|
+| **高** | [Strategy B: 差分リトライ](#strategy-b--差分リトライ-高優先) | 失敗デバイスのコンフィグのみ再生成 | 低 | ✅ 完了 |
+| **高** | [Strategy C: 動的タイムアウト](#strategy-c--動的タイムアウト-高優先) | ノード数に応じたタイムアウト自動計算 | 低 | ✅ 完了 |
+| **中** | [Strategy D: テスト並列化](#strategy-d--テストの並列実行-中優先) | `ThreadPoolExecutor` でテストを並列実行 | 中 | ✅ 完了 |
+| **中** | [Strategy E: 設定の外部化](#strategy-e--設定の外部化-中優先) | `device_configs` をファイルに分離 | 中 | ✅ 完了 |
+| **低** | [Strategy A: 階層的設計](#strategy-a--階層的設計トポロジー分割-低優先) | LangGraph Map-Reduce でポッド並列設計 | 高 | ☐ 未着手 |
+
+---
+
+#### Strategy B — 差分リトライ（高優先）
+
+**課題**: 1 テストが FAIL するだけで全デバイスのコンフィグを LLM に再送信・再生成します。20 台規模だと毎リトライで数万トークンを消費し、コンテキスト上限にも近づきます。
+
+**解決策**: 失敗に関与したデバイスのみを LLM に送り、残りは前回の結果を流用する。
+
+```
+【現在】
+  FAIL → architect が全 20 台のコンフィグをLLMに送信 → 全 20 台を再生成 → 全 20 台を更新
+
+【Strategy B 適用後】
+  FAIL → affected_devices = ["R1", "R3"] → LLMにはR1/R3のコンフィグのみ送信
+       → R1/R3 のコンフィグのみ再生成 → 残り 18 台は前回の結果をそのまま流用
+```
+
+**変更ファイル**:
+- `state.py`: `failed_devices: list[str]` を追加
+- `validator.py`: `FailureAnalysis` に `affected_devices: list[str]` を追加し `run()` で `failed_devices` を返す
+- `architect.py`: `_build_messages()` / `_build_messages_config_only()` を差分対応に変更し `run()` でコンフィグをマージ
+
+**タスク**:
+- [x] `state.py` に `failed_devices: list[str]` を追加
+- [x] `validator.py` の `FailureAnalysis` に `affected_devices` を追加
+- [x] `validator.py` の `run()` で `failed_devices` を返す
+- [x] `architect.py` の `_build_messages()` を差分修正モードに変更
+- [x] `architect.py` の `_build_messages_config_only()` を差分修正モードに変更
+- [x] `architect.py` の `run()` でコンフィグをマージして返す（失敗デバイス分のみ上書き）
+- [ ] `tests/test_architect.py` に差分リトライのテストケースを追加
+
+**完了基準**: `failed_devices` が設定されているリトライでは、LLM への入力が失敗デバイス分のみになり、全デバイス送信時よりトークン数が削減されること。✅ 完了（コード実装済み）
+
+---
+
+#### Strategy C — 動的タイムアウト（高優先）
+
+**課題**: `deploy_lab()` のタイムアウトが固定 300 秒のため、30 台超のラボで `RuntimeError: ノードが規定時間内に起動しませんでした` が発生することがある。
+
+**解決策**: ノード数に応じてタイムアウトを自動計算（目安: `max(300, node_count × 30)` 秒）。
+
+```python
+# cml_tools.py の変更イメージ
+def deploy_lab(
+    topology_yaml: str,
+    device_configs: dict[str, str],
+    title: str = "agentic-ni-lab",
+    timeout: int | None = None,   # None → ノード数で自動計算
+) -> str:
+    if timeout is None:
+        node_count = len(device_configs)
+        timeout = max(300, node_count * 30)
+```
+
+**タスク**:
+- [x] `cml_tools.deploy_lab()` のタイムアウトを `None` デフォルトにして自動計算へ変更
+- [x] `cml_tools.update_configs_and_restart()` も同様に変更
+- [x] `tests/test_cml_tools.py` にタイムアウト計算のテストを追加（11 件）
+
+**完了基準**: ノード数 30 台の場合に 900 秒のタイムアウトが適用されること。✅ 完了（30 件テスト PASS）
+
+---
+
+#### Strategy D — テストの並列実行（中優先）
+
+**課題**: テストが逐次実行されるため、検証時間がテスト数に比例して増加（10 テスト × 平均 10 秒 = 100 秒）。
+
+**解決策**: `concurrent.futures.ThreadPoolExecutor` を使ってテストを並列実行。
+
+```python
+# validator.py の変更イメージ
+from concurrent.futures import ThreadPoolExecutor
+
+def _run_tests_parallel(
+    plan: TestPlan, testbed_yaml: str, max_workers: int = 8
+) -> list[TestResult]:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_execute_test, item, testbed_yaml): item
+                   for item in plan.tests}
+        results = []
+        for future in futures:
+            results.append((futures[future], future.result()))
+    # 元の順序に並べ直す
+    ordered = {item: res for item, res in results}
+    return [ordered[item] for item in plan.tests]
+```
+
+**タスク**:
+- [x] `validator.py` のテスト実行ループを `_run_tests()` に封装し `ThreadPoolExecutor` で並列化
+- [x] テスト結果の元順序保証（`plan.tests` の順序で並べ直し）
+- [x] `MAX_TEST_WORKERS` 環境変数でワーカー数を制御できるようにする（1 = 逐次モード、デフォルト: 8）
+- [x] `tests/test_validator.py` に `TestRunTests` クラス 8 件追加
+
+**完了基準**: 10 件のテストが逐次実行より高速に完了し、結果の順序が保証されること。✅ 完了（31 件テスト PASS）
+
+**完了基準**: 10 件のテストが逐次実行より高速に完了し、結果の順序が保証されること。
+
+---
+
+#### Strategy E — 設定の外部化（中優先）
+
+**課題**: `device_configs: dict[str, str]` が `AgentState` 内に保持されるため、50 台ノードでは数 MB 規模になり、LangGraph のステートシリアライズ・LLM 呼び出し時の全ステートダンプが重くなる。
+
+**解決策**: コンフィグをファイルシステム（`configs/<prompt_set>/<device>.cfg`）に書き出し、State にはパスだけ持たせる。
+
+```python
+# state.py への追加案
+device_config_paths: dict[str, str]
+"""デバイス名 → コンフィグファイルパスのマッピング。
+Strategy E 適用後は device_configs の代わりにこちらを使用する。"""
+```
+
+**タスク**:
+- [x] `state.py` に `device_config_paths: dict[str, str]` を追加
+- [x] `state.py` に `write_device_configs()` / `load_device_configs()` ヘルパーを実装
+- [x] `architect.py` でコンフィグをファイルに保存し、`device_configs={}` にクリアして `device_config_paths` にパスを格納
+- [x] `validator.py` / `graph.py` 全体で `load_device_configs()` 経由に変更（後方互換フォールバック付き）
+- [x] `tests/test_architect.py` に `Strategy E` テスト 3 件追加
+
+**完了基準**: 50 台ノードのラボで `AgentState` のシリアライズサイズが改善されること。✅ 完了（284 件テスト PASS）
+
+---
+
+#### Strategy A — 階層的設計（トポロジー分割）（低優先）
+
+**課題**: LLM の 1 回の呼び出しで 100 台分のトポロジーとコンフィグを生成するのはコンテキスト上限に当たる。また、LLM が 100 台規模のネットワーク全体を一貫した設計で生成するのは困難。
+
+**解決策**: LangGraph の Send API（Map-Reduce）を使い、トポロジーをポッドに分割して並列設計する。
+
+```python
+# graph.py への追加イメージ
+from langgraph.types import Send
+
+def split_into_pods(state: AgentState) -> list[Send]:
+    """トポロジーをポッドに分割して並列設計ノードへ送る。"""
+    pods = _partition_topology(state["topology_yaml"])
+    return [
+        Send("pod_design_node", {**state, "pod_id": i, "pod_spec": spec})
+        for i, spec in enumerate(pods)
+    ]
+```
+
+**タスク**:
+- [ ] ポッド分割ロジック（`_partition_topology()`）を実装
+  - コア/エッジ/アクセス等のレイヤーでの分割
+  - IP アドレス空間の自動割り当て
+- [ ] サブグラフで各ポッドを並列設計（`pod_design_node`）
+- [ ] ポッド設計結果をマージするノードを実装（`merge_pod_results_node`）
+- [ ] ポッド間インターフェースの整合性チェック
+- [ ] `tests/` にポッド分割テストを追加
+
+**完了基準**: 50 台規模のトポロジーが複数ポッドに分割され、各ポッドが独立して設計・検証できること。

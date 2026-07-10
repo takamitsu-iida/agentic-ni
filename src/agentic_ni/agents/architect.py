@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from agentic_ni.llm import get_llm
-from agentic_ni.state import AgentState
+from agentic_ni.state import AgentState, load_device_configs, write_device_configs
 
 # ---------------------------------------------------------------------------
 # 出力スキーマ（Pydantic v2）
@@ -179,24 +179,58 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
     system_prompt = _load_system_prompt(state.get("prompt_set", "demo"))
 
     if state.get("error_log"):
-        # --- 差分修正モード ---
-        user_content = (
-            "## 修正依頼\n\n"
-            "前回の設計に対して検証エージェントから以下のエラーが報告されました。\n"
-            "原因箇所を特定し、最小限の修正を加えた設計を出力してください。\n\n"
-            "### 元の要件\n"
-            f"{state['requirement']}\n\n"
-            "### 前回のトポロジーYAML\n"
-            f"```yaml\n{state.get('topology_yaml', '(なし)')}\n```\n\n"
-            "### 前回の機器コンフィグ\n"
-            + "\n".join(
-                f"**{dev}**:\n```\n{cfg}\n```"
-                for dev, cfg in state.get("device_configs", {}).items()
+        failed_devices: list[str] = state.get("failed_devices", [])
+        if failed_devices:
+            # --- Strategy B: 差分修正モード（失敗デバイスのコンフィグのみ対象）---
+            all_configs = load_device_configs(state)
+            failing_configs_text = "\n".join(
+                f"**{dev}**:\n```\n{all_configs.get(dev, '(なし)')}\n```"
+                for dev in failed_devices
             )
-            + "\n\n### エラーログ（検証エージェントの推論含む）\n"
-            f"```\n{state['error_log']}\n```\n\n"
-            "修正点のみ変更し、問題のない箇所はそのまま維持してください。"
-        )
+            unchanged_devices = [d for d in all_configs if d not in failed_devices]
+            unchanged_note = (
+                f"\n（変更不要なデバイス: {', '.join(unchanged_devices)}）"
+                if unchanged_devices else ""
+            )
+            print(
+                f"  [差分リトライ] 修正対象: {', '.join(failed_devices)}"
+                f"{(' / 流用: ' + ', '.join(unchanged_devices)) if unchanged_devices else ''}",
+                flush=True,
+            )
+            user_content = (
+                "## 差分修正依頼\n\n"
+                "以下のデバイスのコンフィグにのみ問題があります。\n"
+                "**問題のないデバイスのコンフィグは出力不要です。修正対象デバイスのコンフィグのみ出力してください。**\n\n"
+                "### 元の要件\n"
+                f"{state['requirement']}\n\n"
+                "### トポロジーYAML（変更不要）\n"
+                f"```yaml\n{state.get('topology_yaml', '(なし)')}\n```\n\n"
+                f"### 修正対象デバイスのコンフィグ{unchanged_note}\n"
+                f"{failing_configs_text}\n\n"
+                "### エラーログ（検証エージェントの推論含む）\n"
+                f"```\n{state['error_log']}\n```\n\n"
+                f"修正対象デバイス: {', '.join(failed_devices)}\n"
+                "上記デバイスのコンフィグを修正してください。"
+            )
+        else:
+            # --- 全体修正モード（failed_devices が未設定の場合の従来動作）---
+            user_content = (
+                "## 修正依頼\n\n"
+                "前回の設計に対して検証エージェントから以下のエラーが報告されました。\n"
+                "原因箇所を特定し、最小限の修正を加えた設計を出力してください。\n\n"
+                "### 元の要件\n"
+                f"{state['requirement']}\n\n"
+                "### 前回のトポロジーYAML\n"
+                f"```yaml\n{state.get('topology_yaml', '(なし)')}\n```\n\n"
+                "### 前回の機器コンフィグ\n"
+                + "\n".join(
+                    f"**{dev}**:\n```\n{cfg}\n```"
+                    for dev, cfg in load_device_configs(state).items()
+                )
+                + "\n\n### エラーログ（検証エージェントの推論含む）\n"
+                f"```\n{state['error_log']}\n```\n\n"
+                "修正点のみ変更し、問題のない箇所はそのまま維持してください。"
+            )
         # --- 知識ベースコンテキスト付与（インデックス済みなら自動）---
         knowledge_context = _build_knowledge_context(state["requirement"])
         if knowledge_context:
@@ -243,24 +277,59 @@ def _build_messages_config_only(state: AgentState) -> list[dict[str, str]]:
     topology_yaml = state.get("topology_yaml", "")
 
     if state.get("error_log"):
-        # --- コンフィグ修正モード ---
-        user_content = (
-            "## コンフィグ修正依頼\n\n"
-            "前回のコンフィグに対して検証エージェントから以下のエラーが報告されました。\n"
-            "**トポロジーYAMLは変更せず、コンフィグのみ修正してください。**\n\n"
-            "### 元の要件\n"
-            f"{state['requirement']}\n\n"
-            "### 提供済みトポロジーYAML（変更禁止）\n"
-            f"```yaml\n{topology_yaml}\n```\n\n"
-            "### 前回の機器コンフィグ\n"
-            + "\n".join(
-                f"**{dev}**:\n```\n{cfg}\n```"
-                for dev, cfg in state.get("device_configs", {}).items()
+        failed_devices: list[str] = state.get("failed_devices", [])
+        if failed_devices:
+            # --- Strategy B: 差分修正モード（失敗デバイスのコンフィグのみ対象）---
+            all_configs = load_device_configs(state)
+            failing_configs_text = "\n".join(
+                f"**{dev}**:\n```\n{all_configs.get(dev, '(なし)')}\n```"
+                for dev in failed_devices
             )
-            + "\n\n### エラーログ（検証エージェントの推論含む）\n"
-            f"```\n{state['error_log']}\n```\n\n"
-            "修正点のみ変更し、問題のない箇所はそのまま維持してください。"
-        )
+            unchanged_devices = [d for d in all_configs if d not in failed_devices]
+            unchanged_note = (
+                f"\n（変更不要なデバイス: {', '.join(unchanged_devices)}）"
+                if unchanged_devices else ""
+            )
+            print(
+                f"  [差分リトライ] 修正対象: {', '.join(failed_devices)}"
+                f"{(' / 流用: ' + ', '.join(unchanged_devices)) if unchanged_devices else ''}",
+                flush=True,
+            )
+            user_content = (
+                "## 差分コンフィグ修正依頼\n\n"
+                "以下のデバイスのコンフィグにのみ問題があります。\n"
+                "**問題のないデバイスのコンフィグは出力不要です。修正対象デバイスのみ出力してください。**\n"
+                "**トポロジーYAMLは変更禁止です。**\n\n"
+                "### 元の要件\n"
+                f"{state['requirement']}\n\n"
+                "### 提供済みトポロジーYAML（変更禁止）\n"
+                f"```yaml\n{topology_yaml}\n```\n\n"
+                f"### 修正対象デバイスのコンフィグ{unchanged_note}\n"
+                f"{failing_configs_text}\n\n"
+                "### エラーログ（検証エージェントの推論含む）\n"
+                f"```\n{state['error_log']}\n```\n\n"
+                f"修正対象デバイス: {', '.join(failed_devices)}\n"
+                "上記デバイスのコンフィグを修正してください。"
+            )
+        else:
+            # --- 全体修正モード（failed_devices が未設定の場合の従来動作）---
+            user_content = (
+                "## コンフィグ修正依頼\n\n"
+                "前回のコンフィグに対して検証エージェントから以下のエラーが報告されました。\n"
+                "**トポロジーYAMLは変更せず、コンフィグのみ修正してください。**\n\n"
+                "### 元の要件\n"
+                f"{state['requirement']}\n\n"
+                "### 提供済みトポロジーYAML（変更禁止）\n"
+                f"```yaml\n{topology_yaml}\n```\n\n"
+                "### 前回の機器コンフィグ\n"
+                + "\n".join(
+                    f"**{dev}**:\n```\n{cfg}\n```"
+                    for dev, cfg in load_device_configs(state).items()
+                )
+                + "\n\n### エラーログ（検証エージェントの推論含む）\n"
+                f"```\n{state['error_log']}\n```\n\n"
+                "修正点のみ変更し、問題のない箇所はそのまま維持してください。"
+            )
     else:
         # --- 初回コンフィグ生成モード ---
         user_content = (
@@ -342,10 +411,30 @@ def run(state: AgentState) -> dict[str, Any]:
         if state.get("error_log"):
             print(f"  【修正方針】 {result.design_rationale}", flush=True)
 
+        # Strategy B: 差分リトライ時は失敗デバイス分のみ上書きし、残りは流用
+        failed_devices: list[str] = state.get("failed_devices", [])
+        if state.get("error_log") and failed_devices:
+            merged = dict(load_device_configs(state))
+            for dc in result.device_configs:
+                merged[dc.device_name] = dc.config_text
+            new_configs = merged
+        else:
+            new_configs = {dc.device_name: dc.config_text for dc in result.device_configs}
+
+        # Strategy E: コンフィグをファイルに書き出し、State はパスのみ保持
+        prompt_set: str = state.get("prompt_set", "demo")
+        paths = write_device_configs(new_configs, prompt_set)
+        print(
+            f"  [Strategy E] {len(new_configs)} ノードのコンフィグをファイルに保存: configs/{prompt_set}/",
+            flush=True,
+        )
+
         return {
             # topology_yaml はステートの値をそのまま維持（更新しない）
-            "device_configs": {dc.device_name: dc.config_text for dc in result.device_configs},
+            "device_configs": {},          # Strategy E: ファイルに書き出したので State は空に
+            "device_config_paths": paths,  # Strategy E: パスマッピングを保持
             "error_log": "",
+            "failed_devices": [],
         }
 
     # --- 通常モード: トポロジーとコンフィグの両方を生成 ---
@@ -357,14 +446,36 @@ def run(state: AgentState) -> dict[str, Any]:
     if state.get("error_log"):
         print(f"  【設計方針】 {result.design_rationale}", flush=True)
 
-    topology_yaml = _set_lab_title(
-        result.topology_yaml,
-        f"agentic-ni-{state.get('prompt_set', 'demo')}",
+    # Strategy B: 差分リトライ時は失敗デバイス分のみ上書きし、残りは流用
+    # （topology は通常モードでも再生成するが、update_configs_and_restart で既存ラボを活用）
+    failed_devices_normal: list[str] = state.get("failed_devices", [])
+    if state.get("error_log") and failed_devices_normal:
+        merged_normal = dict(load_device_configs(state))
+        for dc in result.device_configs:
+            merged_normal[dc.device_name] = dc.config_text
+        new_configs_normal = merged_normal
+        # 差分リトライ時はトポロジーを保持（余計な変更を防ぐ）
+        topology_yaml = state.get("topology_yaml", "")
+    else:
+        topology_yaml = _set_lab_title(
+            result.topology_yaml,
+            f"agentic-ni-{state.get('prompt_set', 'demo')}",
+        )
+        new_configs_normal = {dc.device_name: dc.config_text for dc in result.device_configs}
+
+    # Strategy E: コンフィグをファイルに書き出し、State はパスのみ保持
+    prompt_set_normal: str = state.get("prompt_set", "demo")
+    paths_normal = write_device_configs(new_configs_normal, prompt_set_normal)
+    print(
+        f"  [Strategy E] {len(new_configs_normal)} ノードのコンフィグをファイルに保存: configs/{prompt_set_normal}/",
+        flush=True,
     )
 
     return {
         "topology_yaml": topology_yaml,
-        "device_configs": {dc.device_name: dc.config_text for dc in result.device_configs},
+        "device_configs": {},                    # Strategy E: ファイルに書き出したので State は空に
+        "device_config_paths": paths_normal,     # Strategy E: パスマッピングを保持
         # 修正設計を出力したらエラーログをクリア（次の検証で上書きされる）
         "error_log": "",
+        "failed_devices": [],
     }

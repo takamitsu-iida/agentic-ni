@@ -144,11 +144,37 @@ def _remove_lab(lab) -> None:
     lab.remove()
 
 
+def _calc_timeout(node_count: int) -> int:
+    """ノード数に応じたタイムアウト秒数を計算して返す（Strategy C: 動的タイムアウト）。
+
+    計算式: ``max(300, node_count * per_node)``
+
+    環境変数 ``CML_TIMEOUT_PER_NODE`` でノード 1 台あたりの秒数を上書きできる
+    （デフォルト: 30 秒/ノード）。最低値は常に 300 秒。
+
+    Args:
+        node_count: 起動するノードの台数。
+
+    Returns:
+        int: 計算されたタイムアウト秒数。
+
+    Examples:
+        >>> _calc_timeout(2)   # 小規模ラボは最低値が適用される
+        300
+        >>> _calc_timeout(20)  # 20台 × 30秒 = 600秒
+        600
+        >>> _calc_timeout(50)  # 50台 × 30秒 = 1500秒
+        1500
+    """
+    per_node: int = int(os.getenv("CML_TIMEOUT_PER_NODE", "30"))
+    return max(300, node_count * per_node)
+
+
 def deploy_lab(
     topology_yaml: str,
     device_configs: dict[str, str],
     title: str = "agentic-ni-lab",
-    timeout: int = 300,
+    timeout: int | None = None,
 ) -> str:
     """ラボのインポート・コンフィグ投入・起動・起動待ちを単一クライアントで一括実行する。
 
@@ -159,7 +185,8 @@ def deploy_lab(
         topology_yaml: CML形式のトポロジー定義（YAML文字列）。
         device_configs: デバイス名 → コンフィグテキストのマッピング。
         title: CML上でのラボ名。同名ラボが存在する場合は削除される。
-        timeout: 全ノード起動待機のタイムアウト秒数（デフォルト: 300秒）。
+        timeout: 全ノード起動待機のタイムアウト秒数。
+            ``None``（デフォルト）の場合は ``_calc_timeout(node_count)`` で自動計算する。
 
     Returns:
         str: 作成されたラボのID。
@@ -199,8 +226,12 @@ def deploy_lab(
     lab.start()
 
     # 同一クライアント・同一ラボオブジェクトで起動待ち
-    print("    ノードの起動を待機中...", flush=True)
-    deadline = time.monotonic() + timeout
+    effective_timeout = timeout if timeout is not None else _calc_timeout(len(device_configs))
+    print(
+        f"    ノードの起動を待機中... (タイムアウト: {effective_timeout}s / {len(device_configs)} ノード)",
+        flush=True,
+    )
+    deadline = time.monotonic() + effective_timeout
     poll_interval = 5
     while time.monotonic() < deadline:
         lab.sync_states()
@@ -210,14 +241,14 @@ def deploy_lab(
         time.sleep(poll_interval)
 
     raise RuntimeError(
-        f"ノードが規定時間内に起動しませんでした (lab_id={lab.id}, timeout={timeout}s)"
+        f"ノードが規定時間内に起動しませんでした (lab_id={lab.id}, timeout={effective_timeout}s)"
     )
 
 
 def update_configs_and_restart(
     lab_id: str,
     device_configs: dict[str, str],
-    timeout: int = 300,
+    timeout: int | None = None,
 ) -> str:
     """既存ラボのコンフィグを更新して再起動する（トポロジーはそのまま）。
 
@@ -228,6 +259,7 @@ def update_configs_and_restart(
         lab_id: 更新対象ラボのID。
         device_configs: デバイス名 → 新しいコンフィグテキスト。
         timeout: 起動待機のタイムアウト秒数。
+            ``None``（デフォルト）の場合は ``_calc_timeout(node_count)`` で自動計算する。
 
     Returns:
         str: ラボID（変更なし）。
@@ -259,10 +291,14 @@ def update_configs_and_restart(
         node.configuration = config
 
     # 再起動・収束待ち
+    effective_timeout = timeout if timeout is not None else _calc_timeout(len(device_configs))
     print("    ラボを再起動中...", flush=True)
     lab.start()
-    print("    ノードの起動を待機中...", flush=True)
-    deadline = time.monotonic() + timeout
+    print(
+        f"    ノードの起動を待機中... (タイムアウト: {effective_timeout}s / {len(device_configs)} ノード)",
+        flush=True,
+    )
+    deadline = time.monotonic() + effective_timeout
     while time.monotonic() < deadline:
         lab.sync_states()
         if lab.has_converged():
@@ -271,7 +307,7 @@ def update_configs_and_restart(
         time.sleep(5)
 
     raise RuntimeError(
-        f"ノードが規定時間内に起動しませんでした (lab_id={lab_id}, timeout={timeout}s)"
+        f"ノードが規定時間内に起動しませんでした (lab_id={lab_id}, timeout={effective_timeout}s)"
     )
 
 

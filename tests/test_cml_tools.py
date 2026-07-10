@@ -412,3 +412,124 @@ class TestFindLabByTitle:
             result = find_lab_by_title("agentic-ni-demo")
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _calc_timeout（Strategy C: 動的タイムアウト）
+# ---------------------------------------------------------------------------
+
+
+class TestCalcTimeout:
+    def test_minimum_300_for_small_lab(self):
+        """ノード数が少なくても最低 300 秒になること。"""
+        from agentic_ni.tools.cml_tools import _calc_timeout
+        assert _calc_timeout(2) == 300
+
+    def test_scales_with_node_count(self):
+        """ノード数 × 30 秒が 300 を超えるとその値が使われること。"""
+        from agentic_ni.tools.cml_tools import _calc_timeout
+        # 20 ノード × 30 秒 = 600 秒
+        assert _calc_timeout(20) == 600
+
+    def test_large_lab(self):
+        """50 ノードでは 1500 秒になること。"""
+        from agentic_ni.tools.cml_tools import _calc_timeout
+        assert _calc_timeout(50) == 1500
+
+    def test_env_var_overrides_per_node_seconds(self, monkeypatch):
+        """CML_TIMEOUT_PER_NODE 環境変数で秒/ノードを変更できること。"""
+        monkeypatch.setenv("CML_TIMEOUT_PER_NODE", "60")
+        import importlib
+        import agentic_ni.tools.cml_tools as cml_mod
+        importlib.reload(cml_mod)
+        # 10 ノード × 60 秒 = 600 秒
+        assert cml_mod._calc_timeout(10) == 600
+        monkeypatch.delenv("CML_TIMEOUT_PER_NODE", raising=False)
+        importlib.reload(cml_mod)
+
+    def test_minimum_enforced_for_single_node(self):
+        """1 ノードでも最低値 300 秒が保証されること。"""
+        from agentic_ni.tools.cml_tools import _calc_timeout
+        assert _calc_timeout(1) == 300
+
+
+# ---------------------------------------------------------------------------
+# deploy_lab — 動的タイムアウト
+# ---------------------------------------------------------------------------
+
+
+class TestDeployLabTimeout:
+    _VALID_YAML = "lab:\n  title: test\n  version: '0.1.0'\nnodes: []\nlinks: []"
+
+    def test_timeout_none_uses_calc(self):
+        """timeout=None のとき _calc_timeout が使われること。"""
+        mock_lab = _make_mock_lab(lab_id="lab-t1")
+        mock_client = _make_mock_client(mock_lab)
+        mock_client.all_labs.return_value = []
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client), \
+             patch("agentic_ni.tools.cml_tools._calc_timeout", return_value=999) as mock_calc:
+            from agentic_ni.tools.cml_tools import deploy_lab
+            deploy_lab(self._VALID_YAML, {"R1": "conf"}, timeout=None)
+
+        mock_calc.assert_called_once_with(1)  # device_configs が 1 台
+
+    def test_explicit_timeout_bypasses_calc(self):
+        """明示的に timeout を渡した場合 _calc_timeout は呼ばれないこと。"""
+        mock_lab = _make_mock_lab(lab_id="lab-t2")
+        mock_client = _make_mock_client(mock_lab)
+        mock_client.all_labs.return_value = []
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client), \
+             patch("agentic_ni.tools.cml_tools._calc_timeout") as mock_calc:
+            from agentic_ni.tools.cml_tools import deploy_lab
+            deploy_lab(self._VALID_YAML, {"R1": "conf"}, timeout=120)
+
+        mock_calc.assert_not_called()
+
+    def test_timeout_error_message_shows_effective_value(self):
+        """タイムアウト時のエラーメッセージに実効タイムアウト値が含まれること。"""
+        mock_lab = _make_mock_lab(lab_id="lab-t3")
+        mock_lab.has_converged.return_value = False  # 収束しない
+        mock_client = _make_mock_client(mock_lab)
+        mock_client.all_labs.return_value = []
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client), \
+             patch("agentic_ni.tools.cml_tools._calc_timeout", return_value=1), \
+             patch("time.sleep"):
+            from agentic_ni.tools.cml_tools import deploy_lab
+            with pytest.raises(RuntimeError, match="timeout=1s"):
+                deploy_lab(self._VALID_YAML, {"R1": "conf"}, timeout=None)
+
+
+# ---------------------------------------------------------------------------
+# update_configs_and_restart — 動的タイムアウト
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateConfigsAndRestartTimeout:
+    def test_timeout_none_uses_calc(self):
+        """timeout=None のとき _calc_timeout が使われること。"""
+        mock_lab = _make_mock_lab(lab_id="lab-u1")
+        mock_client = _make_mock_client(mock_lab)
+        mock_client.join_existing_lab.return_value = None
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client), \
+             patch("agentic_ni.tools.cml_tools._calc_timeout", return_value=888) as mock_calc:
+            from agentic_ni.tools.cml_tools import update_configs_and_restart
+            update_configs_and_restart("lab-u1", {"R1": "conf", "R2": "conf"})
+
+        mock_calc.assert_called_once_with(2)
+
+    def test_explicit_timeout_bypasses_calc(self):
+        """明示的に timeout を渡した場合 _calc_timeout は呼ばれないこと。"""
+        mock_lab = _make_mock_lab(lab_id="lab-u2")
+        mock_client = _make_mock_client(mock_lab)
+        mock_client.join_existing_lab.return_value = None
+
+        with patch("agentic_ni.tools.cml_tools._get_client", return_value=mock_client), \
+             patch("agentic_ni.tools.cml_tools._calc_timeout") as mock_calc:
+            from agentic_ni.tools.cml_tools import update_configs_and_restart
+            update_configs_and_restart("lab-u2", {"R1": "conf"}, timeout=200)
+
+        mock_calc.assert_not_called()
