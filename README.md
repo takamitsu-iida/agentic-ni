@@ -1312,6 +1312,94 @@ agentic-ni --list
 
 ---
 
+### 新しいテストタイプの追加方法
+
+検証エージェントが実行できるテストタイプ（`ospf_neighbors`、`ping` など）を追加するには、以下の **3 箇所を同時に** 更新する必要があります。
+
+> **重要**: この 3 箇所は密結合しています。1 箇所だけ更新すると動作しません。
+
+#### 更新が必要な箇所
+
+| # | ファイル | 役割 |
+|---|---|---|
+| 1 | `src/agentic_ni/prompts/validator_system.md` | LLM に「このテストタイプが使える」と教える |
+| 2 | `src/agentic_ni/agents/validator.py` の `TestItem.test_type` | LLM の出力値を Pydantic の `Literal` 型で制約する |
+| 3 | `src/agentic_ni/agents/validator.py` の `_execute_test()` | テストタイプに対応する `pyats_tools` 関数を呼び出す |
+
+#### 例: `ntp_status`（NTPサーバー同期確認）を追加する場合
+
+**Step 1 — `validator_system.md` のテーブルに追記**
+
+```markdown
+| `ntp_status` | NTPサーバーとの同期状態を確認 | 不要（null） |
+```
+
+**Step 2 — `TestItem.test_type` の `Literal` に追加**
+
+```python
+# src/agentic_ni/agents/validator.py
+class TestItem(BaseModel):
+    test_type: Literal[
+        "ospf_neighbors",
+        "bgp_summary",
+        "ping",
+        # ... 既存のタイプ ...
+        "ntp_status",   # ← ここに追加
+    ]
+```
+
+**Step 3 — `_execute_test()` の `elif` チェーンに追加**
+
+```python
+# src/agentic_ni/agents/validator.py
+elif item.test_type == "ntp_status":
+    data = pyats_tools.check_ntp_status(testbed_yaml, item.device)
+    ok = data["synchronized"]
+    detail = (
+        f"NTP synchronized to {data['ref_clock']}"
+        if ok
+        else "NTP not synchronized"
+    )
+```
+
+**Step 4 — `pyats_tools.py` に実装関数を追加**
+
+```python
+# src/agentic_ni/tools/pyats_tools.py
+def check_ntp_status(testbed_yaml: str, device: str) -> dict:
+    """NTPサーバーとの同期状態を確認する。"""
+    # pyATS/Genie で "show ntp status" を実行してパース
+    ...
+    return {"synchronized": True, "ref_clock": "10.0.0.1"}
+```
+
+#### 仕組みのまとめ
+
+```
+LLM（計画係）                    Python（実行係）
+    │                                │
+    │  with_structured_output()      │
+    │  → TestPlan (Pydantic)         │
+    │    tests: [                    │
+    │      {test_type: "ping",  ─────┼──→ pyats_tools.check_ping()
+    │       device: "R1",            │
+    │       target: "2.2.2.2"}  ─────┼──→ pyats_tools.check_ping()
+    │    ]                           │
+    │                                │
+    │  FailureAnalysis (Pydantic)    │
+    │  → root_cause: "..."           │
+    └────────────────────────────────┘
+
+LLM は「何をすべきか」の計画書（JSON）を出力するだけ。
+実際の pyATS コマンド実行は Python の _execute_test() が担う。
+```
+
+- **LLM がテストタイプを知る手段** → `validator_system.md` のテーブル（自然言語の説明）
+- **LLM の出力を制約する手段** → `TestItem.test_type` の `Literal` 型（不正値を弾く）
+- **テストを実行する手段** → `_execute_test()` の `if/elif` チェーン + `pyats_tools` 関数
+
+---
+
 ### Python API から実行する場合
 
 #### 通常モード
