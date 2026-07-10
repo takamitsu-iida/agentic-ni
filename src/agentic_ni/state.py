@@ -69,8 +69,6 @@ class AgentState(TypedDict):
     prompt_set: str
     """使用するプロンプトセット名。prompts/<prompt_set>/ ディレクトリのサブフォルダ名。デフォルト: 'default'"""
 
-    use_rag: bool
-    """過去の成功事例をベクトルRAGで検索して設計エージェントのプロンプトに追加するかどうか。"""
 
     use_provided_topology: bool
     """True の場合、configs/<prompt_set>/topology.yaml をトポロジーとして使用し、

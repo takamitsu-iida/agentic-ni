@@ -63,5 +63,33 @@ def test_get_llm_unknown_provider_raises(monkeypatch):
     import agentic_ni.llm as llm_module
 
     importlib.reload(llm_module)
-    with pytest.raises(ValueError, match="未対応のLLMプロバイダー"):
+    # 未対応プロバイダーは SystemExit(1) で終了する（スタックトレースなし）
+    with pytest.raises(SystemExit) as exc_info:
         llm_module.get_llm()
+    assert exc_info.value.code == 1
+
+
+def test_get_llm_missing_openai_key_exits(monkeypatch):
+    """OPENAI_API_KEY 未設定時に SystemExit(1) が発生すること。"""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    import agentic_ni.llm as llm_module
+
+    importlib.reload(llm_module)
+    with pytest.raises(SystemExit) as exc_info:
+        llm_module.get_llm()
+    assert exc_info.value.code == 1
+
+
+def test_get_llm_missing_anthropic_key_exits(monkeypatch):
+    """ANTHROPIC_API_KEY 未設定時に SystemExit(1) が発生すること。"""
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    import agentic_ni.llm as llm_module
+
+    importlib.reload(llm_module)
+    with pytest.raises(SystemExit) as exc_info:
+        llm_module.get_llm()
+    assert exc_info.value.code == 1

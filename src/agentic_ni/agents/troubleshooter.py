@@ -18,19 +18,20 @@ Phase A/B との違い:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from agentic_ni.agents.prompts import load_agent_prompt
+from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState, TroubleshootFixRecord
-
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 # ---------------------------------------------------------------------------
 # Pydantic スキーマ
+logger = get_logger(__name__)
+
 # ---------------------------------------------------------------------------
 
 
@@ -100,15 +101,8 @@ class FixPlan(BaseModel):
 
 
 def _load_system_prompt() -> str:
-    """troubleshooter_system.md を読み込んで返す。"""
-    path = _PROMPTS_DIR / "troubleshooter_system.md"
-    if not path.exists():
-        return (
-            "あなたはネットワークトラブルシューティングの専門家です。"
-            "稼働中のルーターの状態を分析し、根本原因を特定して"
-            "インクリメンタルな修正コマンドを生成してください。"
-        )
-    return path.read_text(encoding="utf-8")
+    """troubleshooter プロンプトを返す（prompts.load_agent_prompt のラッパー）。"""
+    return load_agent_prompt("troubleshooter")
 
 
 def _format_collected_state(collected_state: dict) -> str:
@@ -235,14 +229,14 @@ def run_collect(state: AgentState) -> dict[str, Any]:
 
     lab_id = state.get("troubleshoot_lab_id") or state.get("lab_id", "")
     if not lab_id:
-        print("  [収集] lab_id が未設定のためスキップします。", flush=True)
+        logger.info("  [収集] lab_id が未設定のためスキップします。")
         return {"collected_state": {}, "device_configs": {}}
 
     # CML からデバイス一覧を取得
     nodes = cml_tools.get_lab_nodes(lab_id)
     booted_nodes = [n for n in nodes if n["state"] == "BOOTED"]
     if not booted_nodes:
-        print(f"  [収集] 起動済みノードがありません (lab_id={lab_id})", flush=True)
+        logger.info(f"  [収集] 起動済みノードがありません (lab_id={lab_id})")
         return {"collected_state": {}, "device_configs": {}}
 
     # 空の device_configs でテストベッドを構築（デバイス名を渡すだけで接続情報は CML から取得）
@@ -254,13 +248,13 @@ def run_collect(state: AgentState) -> dict[str, Any]:
 
     for node in booted_nodes:
         device_name = node["label"]
-        print(f"    収集中: {device_name} ...", flush=True)
+        logger.info(f"    収集中: {device_name} ...")
         try:
             state_data = pyats_tools.collect_device_state(testbed_yaml, device_name)
             collected_state[device_name] = state_data
             device_configs[device_name] = state_data.get("running_config", "")
         except Exception as exc:  # noqa: BLE001
-            print(f"    ⚠ {device_name} の収集失敗: {exc}", flush=True)
+            logger.info(f"    ⚠ {device_name} の収集失敗: {exc}")
             collected_state[device_name] = {"error": str(exc)}
             device_configs[device_name] = ""
 
@@ -292,7 +286,7 @@ def run_diagnose(state: AgentState) -> dict[str, Any]:
         f"## 重大度\n{result.severity}\n\n"
         f"## 概要\n{result.summary}"
     )
-    print(f"  診断: [{result.severity}] {result.root_cause}", flush=True)
+    logger.info(f"  診断: [{result.severity}] {result.root_cause}")
     return {"diagnosis": diagnosis_text}
 
 
@@ -318,13 +312,12 @@ def run_fix(state: AgentState) -> dict[str, Any]:
     fix_plan: FixPlan = structured_llm.invoke(
         _build_fix_plan_messages(state, diagnosis, collected_state)
     )
-    print(
+    logger.info(
         f"  修正計画: {len(fix_plan.fixes)} 件 — {fix_plan.rationale}",
-        flush=True,
     )
 
     if not fix_plan.fixes:
-        print("  修正コマンドがありません。スキップします。", flush=True)
+        logger.info("  修正コマンドがありません。スキップします。")
         return {
             "fix_records": list(state.get("fix_records", [])),
             "troubleshoot_retry_count": state.get("troubleshoot_retry_count", 0) + 1,
@@ -335,7 +328,7 @@ def run_fix(state: AgentState) -> dict[str, Any]:
     new_fix_records = list(state.get("fix_records", []))
 
     for fix in fix_plan.fixes:
-        print(f"    適用中 [{fix.device}]: {fix.description}", flush=True)
+        logger.info(f"    適用中 [{fix.device}]: {fix.description}")
         try:
             pyats_tools.apply_incremental_config(testbed_yaml, fix.device, fix.commands)
             new_fix_records.append(
@@ -348,7 +341,7 @@ def run_fix(state: AgentState) -> dict[str, Any]:
                     description=fix.description,
                 )
             )
-            print(f"    ✅ 適用成功: {fix.device}", flush=True)
+            logger.info(f"    ✅ 適用成功: {fix.device}")
         except Exception as exc:  # noqa: BLE001
             error_msg = f"{type(exc).__name__}: {exc}"
             new_fix_records.append(
@@ -361,7 +354,7 @@ def run_fix(state: AgentState) -> dict[str, Any]:
                     description=fix.description,
                 )
             )
-            print(f"    ❌ 適用失敗: {fix.device} — {error_msg}", flush=True)
+            logger.info(f"    ❌ 適用失敗: {fix.device} — {error_msg}")
 
     return {
         "fix_records": new_fix_records,

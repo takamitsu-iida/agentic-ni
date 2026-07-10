@@ -14,7 +14,11 @@ import warnings
 import yaml
 from dotenv import load_dotenv
 
+from agentic_ni.logger import get_logger
+
 load_dotenv()
+
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -70,8 +74,9 @@ def _get_client():
         virl2_client.InitializationError: CMLへの接続に失敗した場合
     """
 
-    # SSL Verification disabled のログが鬱陶しいので、ERRORのみに抑制
-    logging.getLogger("virl2_client.virl2_client").setLevel(logging.ERROR)
+    # SSL Verification disabled のログが鬱陶しいので抑制（configure_logging でも設定済み）
+    import logging as _logging
+    _logging.getLogger("virl2_client.virl2_client").setLevel(_logging.ERROR)
     from virl2_client import ClientLibrary
 
     url = os.getenv("CML_URL")
@@ -202,17 +207,17 @@ def deploy_lab(
     # 同名ラボが既に存在する場合はすべて削除する
     existing = [lab for lab in client.all_labs() if lab.title == title]
     if existing:
-        print(f"    同名ラボ {len(existing)} 件を削除中...", flush=True)
+        logger.info(f"    同名ラボ {len(existing)} 件を削除中...")
         for existing_lab in existing:
             _remove_lab(existing_lab)
 
     # YAMLの補完・修正後にインポート（起動はしない）
-    print("    ラボをインポート中...", flush=True)
+    logger.info("    ラボをインポート中...")
     patched_yaml = _patch_topology_yaml(topology_yaml)
     lab = client.import_lab(topology=patched_yaml, title=title)
 
     # 同一クライアント・同一ラボオブジェクトでコンフィグを投入（Day-0 config）
-    print(f"    コンフィグを投入中 ({len(device_configs)} ノード)...", flush=True)
+    logger.info(f"    コンフィグを投入中 ({len(device_configs)} ノード)...")
     for node_name, config in device_configs.items():
         node = lab.get_node_by_label(node_name)
         if node is None:
@@ -222,21 +227,20 @@ def deploy_lab(
         node.configuration = config
 
     # コンフィグ投入後に起動
-    print("    ラボを起動中...", flush=True)
+    logger.info("    ラボを起動中...")
     lab.start()
 
     # 同一クライアント・同一ラボオブジェクトで起動待ち
     effective_timeout = timeout if timeout is not None else _calc_timeout(len(device_configs))
-    print(
+    logger.info(
         f"    ノードの起動を待機中... (タイムアウト: {effective_timeout}s / {len(device_configs)} ノード)",
-        flush=True,
     )
     deadline = time.monotonic() + effective_timeout
     poll_interval = 5
     while time.monotonic() < deadline:
         lab.sync_states()
         if lab.has_converged():
-            print(f"    起動完了 (lab_id={lab.id})", flush=True)
+            logger.info(f"    起動完了 (lab_id={lab.id})")
             return lab.id
         time.sleep(poll_interval)
 
@@ -275,13 +279,13 @@ def update_configs_and_restart(
         raise KeyError(f"ラボが見つかりません: lab_id={lab_id!r}")
 
     # 停止・wipe（Day-0 configを再適用できる状態にする）
-    print("    既存ラボを停止・wipe中...", flush=True)
+    logger.info("    既存ラボを停止・wipe中...")
     if lab.is_active():
         lab.stop()
     lab.wipe()
 
     # コンフィグを更新
-    print(f"    コンフィグを更新中 ({len(device_configs)} ノード)...", flush=True)
+    logger.info(f"    コンフィグを更新中 ({len(device_configs)} ノード)...")
     for node_name, config in device_configs.items():
         node = lab.get_node_by_label(node_name)
         if node is None:
@@ -292,17 +296,16 @@ def update_configs_and_restart(
 
     # 再起動・収束待ち
     effective_timeout = timeout if timeout is not None else _calc_timeout(len(device_configs))
-    print("    ラボを再起動中...", flush=True)
+    logger.info("    ラボを再起動中...")
     lab.start()
-    print(
+    logger.info(
         f"    ノードの起動を待機中... (タイムアウト: {effective_timeout}s / {len(device_configs)} ノード)",
-        flush=True,
     )
     deadline = time.monotonic() + effective_timeout
     while time.monotonic() < deadline:
         lab.sync_states()
         if lab.has_converged():
-            print(f"    起動完了 (lab_id={lab_id})", flush=True)
+            logger.info(f"    起動完了 (lab_id={lab_id})")
             return lab_id
         time.sleep(5)
 

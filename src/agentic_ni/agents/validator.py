@@ -7,15 +7,16 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from agentic_ni.agents.prompts import load_agent_prompt, list_prompt_sets
+from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState, TestResult, load_device_configs
 
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+logger = get_logger(__name__)
 
 # テスト並列実行の最大ワーカー数（環境変数 MAX_TEST_WORKERS で上書き可能）。
 # 1 を指定すると逐次実行（デバッグ・接続安定性優先）になる。
@@ -87,42 +88,8 @@ class FailureAnalysis(BaseModel):
 
 
 def _load_system_prompt(prompt_set: str = "demo") -> str:
-    """validator プロンプトを構築して返す。
-
-    読み込み方針:
-    1. prompts/validator_system.md をベースとして読み込む
-    2. prompts/<set>/validator.md が存在すれば、セット固有要件として末尾に結合する
-
-    後方互換:
-    - prompts/<set>/validator_system.md が存在する場合は単独使用（旧形式）
-    """
-    base_path = _PROMPTS_DIR / "validator_system.md"
-    set_specific_path = _PROMPTS_DIR / prompt_set / "validator.md"
-    set_legacy_path = _PROMPTS_DIR / prompt_set / "validator_system.md"
-
-    # 後方互換: セット内に validator_system.md があれば単独使用
-    if set_legacy_path.exists():
-        return set_legacy_path.read_text(encoding="utf-8")
-
-    if not base_path.exists():
-        raise FileNotFoundError(
-            f"validator_system.md が見つかりません: {base_path}"
-        )
-    base = base_path.read_text(encoding="utf-8")
-
-    if set_specific_path.exists():
-        specific = set_specific_path.read_text(encoding="utf-8")
-        return f"{base}\n\n---\n\n{specific}"
-
-    return base
-
-
-def list_prompt_sets() -> list[str]:
-    """利用可能なプロンプトセット一覧を返す。"""
-    return sorted(
-        d.name for d in _PROMPTS_DIR.iterdir()
-        if d.is_dir() and (d / "validator_system.md").exists()
-    )
+    """validator プロンプトを返す（prompts.load_agent_prompt のラッパー）。"""
+    return load_agent_prompt("validator", prompt_set)
 
 
 def _build_test_plan_messages(state: AgentState) -> list[dict[str, str]]:
@@ -326,10 +293,10 @@ def _run_tests(plan: TestPlan, testbed_yaml: str) -> list[TestResult]:
         # --- 逐次実行（従来動作 / デバッグモード）---
         results: list[TestResult] = []
         for i, item in enumerate(plan.tests, 1):
-            print(f"        ({i}/{total}) {item.description}", flush=True)
+            logger.info(f"        ({i}/{total}) {item.description}")
             result = _execute_test(item, testbed_yaml)
             mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
-            print(f"               → {mark}  {result['detail']}", flush=True)
+            logger.info(f"               → {mark}  {result['detail']}")
             results.append(result)
         return results
 
@@ -346,9 +313,8 @@ def _run_tests(plan: TestPlan, testbed_yaml: str) -> list[TestResult]:
             result = future.result()
             results_by_index[idx] = result
             mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
-            print(
+            logger.info(
                 f"        [{idx + 1}/{total}] {item.description} → {mark}  {result['detail']}",
-                flush=True,
             )
 
     return [results_by_index[i] for i in range(total)]
@@ -370,7 +336,7 @@ def _deploy(state: AgentState) -> str:
     if state.get("skip_deploy", False):
         existing_id = state.get("lab_id", "")
         if existing_id:
-            print(f"    既存ラボを再利用（デプロイスキップ）: lab_id={existing_id}", flush=True)
+            logger.info(f"    既存ラボを再利用（デプロイスキップ）: lab_id={existing_id}")
             return existing_id
 
     topology_yaml = state.get("topology_yaml", "")
@@ -416,24 +382,24 @@ def run(state: AgentState) -> dict[str, Any]:
     trial = new_retry_count
 
     # --- 1. デプロイ ---
-    print(f"  [1/4] CML にデプロイ中...", flush=True)
+    logger.info(f"  [1/4] CML にデプロイ中...")
     try:
         lab_id = _deploy(state)
     except Exception as exc:  # noqa: BLE001
-        print(f"  [1/4] デプロイ失敗: {exc}", flush=True)
+        logger.info(f"  [1/4] デプロイ失敗: {exc}")
         return {
             "lab_id": state.get("lab_id", ""),
             "test_results": [],
             "error_log": f"デプロイ失敗: {type(exc).__name__}: {exc}",
             "retry_count": new_retry_count,
         }
-    print(f"  [1/4] デプロイ完了 (lab_id={lab_id})", flush=True)
+    logger.info(f"  [1/4] デプロイ完了 (lab_id={lab_id})")
 
     # --- 2. テスト計画立案 ---
-    print(f"  [2/4] テスト計画を立案中...", flush=True)
+    logger.info(f"  [2/4] テスト計画を立案中...")
     structured_llm = llm.with_structured_output(TestPlan, method="function_calling")
     plan: TestPlan = structured_llm.invoke(_build_test_plan_messages(state))
-    print(f"  [2/4] テスト計画完了 ({len(plan.tests)} 件)", flush=True)
+    logger.info(f"  [2/4] テスト計画完了 ({len(plan.tests)} 件)")
 
     # --- 3. テストベッド取得 ---
     from agentic_ni.tools import pyats_tools
@@ -442,7 +408,7 @@ def run(state: AgentState) -> dict[str, Any]:
 
     # --- 4. テスト実行 ---
     mode_label = "逐次" if MAX_TEST_WORKERS <= 1 else f"並列 最大 {MAX_TEST_WORKERS} workers"
-    print(f"  [3/4] テストを実行中... ({mode_label})", flush=True)
+    logger.info(f"  [3/4] テストを実行中... ({mode_label})")
     test_results = _run_tests(plan, testbed_yaml)
 
     # --- 5. 失敗分析 ---
@@ -450,7 +416,7 @@ def run(state: AgentState) -> dict[str, Any]:
     error_log = ""
 
     if failed:
-        print(f"  [4/4] 失敗原因を AI が分析中... ({len(failed)} 件失敗)", flush=True)
+        logger.info(f"  [4/4] 失敗原因を AI が分析中... ({len(failed)} 件失敗)")
         analysis_llm = llm.with_structured_output(FailureAnalysis, method="function_calling")
         analysis: FailureAnalysis = analysis_llm.invoke(
             _build_analysis_messages(state, failed)
@@ -459,25 +425,19 @@ def run(state: AgentState) -> dict[str, Any]:
             f"## 根本原因\n{analysis.root_cause}\n\n"
             f"## 修正依頼\n{analysis.suggestion}"
         )
-        print(f"  [4/4] 分析完了", flush=True)
-        print(f"", flush=True)
-        print(f"  『根本原因』 {analysis.root_cause}", flush=True)
-        print(f"  『修正依頼』 {analysis.suggestion}", flush=True)
-        print(f"", flush=True)
+        logger.info(f"  [4/4] 分析完了")
+        logger.info(f"")
+        logger.info(f"  『根本原因』 {analysis.root_cause}")
+        logger.info(f"  『修正依頼』 {analysis.suggestion}")
+        logger.info(f"")
     else:
-        print(f"  [4/4] 全テスト PASS", flush=True)
-
-    # error_history に今回のエラーを追記（RAG保存用）
-    error_history = list(state.get("error_history", []))
-    if error_log:
-        error_history.append(error_log)
+        logger.info(f"  [4/4] 全テスト PASS")
 
     return {
         "lab_id": lab_id,
         "test_results": test_results,
         "test_plan_items": [item.model_dump() for item in plan.tests],
         "error_log": error_log,
-        "error_history": error_history,
         "retry_count": new_retry_count,
         "failed_devices": analysis.affected_devices if failed else [],
     }

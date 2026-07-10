@@ -7,19 +7,20 @@ LLMを使って要件またはエラーログからCMLトポロジーYAMLと
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from agentic_ni.agents.prompts import PROMPTS_DIR as _PROMPTS_DIR, load_agent_prompt, list_prompt_sets
+from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState, load_device_configs, write_device_configs
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # 出力スキーマ（Pydantic v2）
 # ---------------------------------------------------------------------------
-
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 class DeviceConfig(BaseModel):
@@ -66,42 +67,8 @@ class ConfigOnlyOutput(BaseModel):
 
 
 def _load_system_prompt(prompt_set: str = "demo") -> str:
-    """architect プロンプトを構築して返す。
-
-    読み込み方針:
-    1. prompts/architect_system.md をベースとして読み込む
-    2. prompts/<set>/architect.md が存在すれば、セット固有ヒントとして末尾に結合する
-
-    後方互換:
-    - prompts/<set>/architect_system.md が存在する場合は単独使用（旧形式）
-    """
-    base_path = _PROMPTS_DIR / "architect_system.md"
-    set_specific_path = _PROMPTS_DIR / prompt_set / "architect.md"
-    set_legacy_path = _PROMPTS_DIR / prompt_set / "architect_system.md"
-
-    # 後方互換: セット内に architect_system.md があれば単独使用
-    if set_legacy_path.exists():
-        return set_legacy_path.read_text(encoding="utf-8")
-
-    if not base_path.exists():
-        raise FileNotFoundError(
-            f"architect_system.md が見つかりません: {base_path}"
-        )
-    base = base_path.read_text(encoding="utf-8")
-
-    if set_specific_path.exists():
-        specific = set_specific_path.read_text(encoding="utf-8")
-        return f"{base}\n\n---\n\n{specific}"
-
-    return base
-
-
-def list_prompt_sets() -> list[str]:
-    """利用可能なプロンプトセット一覧を返す。requirement.md を持つディレクトリを対象とする。"""
-    return sorted(
-        d.name for d in _PROMPTS_DIR.iterdir()
-        if d.is_dir() and (d / "requirement.md").exists()
-    )
+    """architect プロンプトを返す（prompts.load_agent_prompt のラッパー）。"""
+    return load_agent_prompt("architect", prompt_set)
 
 
 def _build_rag_context(error_log: str) -> str:
@@ -192,10 +159,9 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
                 f"\n（変更不要なデバイス: {', '.join(unchanged_devices)}）"
                 if unchanged_devices else ""
             )
-            print(
+            logger.info(
                 f"  [差分リトライ] 修正対象: {', '.join(failed_devices)}"
                 f"{(' / 流用: ' + ', '.join(unchanged_devices)) if unchanged_devices else ''}",
-                flush=True,
             )
             user_content = (
                 "## 差分修正依頼\n\n"
@@ -235,9 +201,8 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
         knowledge_context = _build_knowledge_context(state["requirement"])
         if knowledge_context:
             user_content += f"\n\n{knowledge_context}"
-            print(
+            logger.info(
                 f"  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。",
-                flush=True,
             )
     else:
         # --- ゼロ設計モード ---
@@ -252,13 +217,11 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
         knowledge_context = _build_knowledge_context(state["requirement"])
         if knowledge_context:
             user_content += f"\n\n{knowledge_context}"
-            print(
+            logger.info(
                 f"  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。",
-                flush=True,
             )
         else:
-            print("  [知識ベース] 未インデックス（スキップ）。agentic-ni --rag-index で索引化できます。",
-                flush=True,
+            logger.info("  [知識ベース] 未インデックス（スキップ）。agentic-ni --rag-index で索引化できます。",
             )
 
     return [
@@ -290,10 +253,9 @@ def _build_messages_config_only(state: AgentState) -> list[dict[str, str]]:
                 f"\n（変更不要なデバイス: {', '.join(unchanged_devices)}）"
                 if unchanged_devices else ""
             )
-            print(
+            logger.info(
                 f"  [差分リトライ] 修正対象: {', '.join(failed_devices)}"
                 f"{(' / 流用: ' + ', '.join(unchanged_devices)) if unchanged_devices else ''}",
-                flush=True,
             )
             user_content = (
                 "## 差分コンフィグ修正依頼\n\n"
@@ -346,14 +308,12 @@ def _build_messages_config_only(state: AgentState) -> list[dict[str, str]]:
         knowledge_context = _build_knowledge_context(state["requirement"])
         if knowledge_context:
             user_content += f"\n\n{knowledge_context}"
-            print(
+            logger.info(
                 "  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。",
-                flush=True,
             )
         else:
-            print(
+            logger.info(
                 "  [知識ベース] 未インデックス（スキップ）。agentic-ni --rag-index で索引化できます。",
-                flush=True,
             )
 
     return [
@@ -409,7 +369,7 @@ def run(state: AgentState) -> dict[str, Any]:
         result: ConfigOnlyOutput = structured_llm.invoke(messages)
 
         if state.get("error_log"):
-            print(f"  【修正方針】 {result.design_rationale}", flush=True)
+            logger.info(f"  【修正方針】 {result.design_rationale}")
 
         # Strategy B: 差分リトライ時は失敗デバイス分のみ上書きし、残りは流用
         failed_devices: list[str] = state.get("failed_devices", [])
@@ -424,9 +384,8 @@ def run(state: AgentState) -> dict[str, Any]:
         # Strategy E: コンフィグをファイルに書き出し、State はパスのみ保持
         prompt_set: str = state.get("prompt_set", "demo")
         paths = write_device_configs(new_configs, prompt_set)
-        print(
+        logger.info(
             f"  [Strategy E] {len(new_configs)} ノードのコンフィグをファイルに保存: configs/{prompt_set}/",
-            flush=True,
         )
 
         return {
@@ -444,7 +403,7 @@ def run(state: AgentState) -> dict[str, Any]:
     result: DesignOutput = structured_llm.invoke(messages)
 
     if state.get("error_log"):
-        print(f"  【設計方針】 {result.design_rationale}", flush=True)
+        logger.info(f"  【設計方針】 {result.design_rationale}")
 
     # Strategy B: 差分リトライ時は失敗デバイス分のみ上書きし、残りは流用
     # （topology は通常モードでも再生成するが、update_configs_and_restart で既存ラボを活用）
@@ -466,9 +425,8 @@ def run(state: AgentState) -> dict[str, Any]:
     # Strategy E: コンフィグをファイルに書き出し、State はパスのみ保持
     prompt_set_normal: str = state.get("prompt_set", "demo")
     paths_normal = write_device_configs(new_configs_normal, prompt_set_normal)
-    print(
+    logger.info(
         f"  [Strategy E] {len(new_configs_normal)} ノードのコンフィグをファイルに保存: configs/{prompt_set_normal}/",
-        flush=True,
     )
 
     return {

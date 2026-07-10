@@ -17,19 +17,20 @@ Phase H (troubleshooter) との違い:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from agentic_ni.agents.prompts import load_agent_prompt
+from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState
-
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 # ---------------------------------------------------------------------------
 # Pydantic スキーマ
+logger = get_logger(__name__)
+
 # ---------------------------------------------------------------------------
 
 
@@ -100,15 +101,8 @@ class ImprovementOutput(BaseModel):
 
 
 def _load_system_prompt() -> str:
-    """analyzer_system.md を読み込んで返す。"""
-    path = _PROMPTS_DIR / "analyzer_system.md"
-    if not path.exists():
-        return (
-            "あなたは上級ネットワークアーキテクトです。"
-            "稼働中のネットワーク機器の running-config と show コマンド出力を精査し、"
-            "設計品質を評価するか、改善要求に基づいて改善後のコンフィグを生成します。"
-        )
-    return path.read_text(encoding="utf-8")
+    """analyzer プロンプトを返す（prompts.load_agent_prompt のラッパー）。"""
+    return load_agent_prompt("analyzer")
 
 
 def _format_collected_state(collected_state: dict) -> str:
@@ -248,7 +242,7 @@ def run_analyze(state: AgentState) -> dict[str, Any]:
     )
 
     summary_preview = result.summary[:80] + ("..." if len(result.summary) > 80 else "")
-    print(f"  分析結果: [{result.overall_rating}] {summary_preview}", flush=True)
+    logger.info(f"  分析結果: [{result.overall_rating}] {summary_preview}")
     return {"analysis_result": analysis_text}
 
 
@@ -276,9 +270,8 @@ def run_improve(state: AgentState) -> dict[str, Any]:
     )
 
     rationale_preview = result.rationale[:60] + ("..." if len(result.rationale) > 60 else "")
-    print(
+    logger.info(
         f"  改善計画: {len(result.changes_summary)} 件の変更 — {rationale_preview}",
-        flush=True,
     )
     return {
         "device_configs": result.device_configs,

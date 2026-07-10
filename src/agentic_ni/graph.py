@@ -25,8 +25,11 @@ from langgraph.types import interrupt
 
 from agentic_ni.agents import architect, analyzer, fault_simulator, troubleshooter, validator
 from agentic_ni.state import AgentState, FaultScenarioResult, LiveApplyRecord, load_device_configs
+from agentic_ni.logger import get_logger
 
 load_dotenv()
+
+logger = get_logger(__name__)
 
 MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "5"))
 TROUBLESHOOT_MAX_RETRIES: int = int(os.getenv("TROUBLESHOOT_MAX_RETRIES", "3"))
@@ -41,29 +44,29 @@ def architect_node(state: AgentState) -> dict:
     """設計エージェント。要件またはエラーログからトポロジーYAMLと機器コンフィグを生成する。"""
     trial = state.get("retry_count", 0) + 1
     mode = "修正設計" if state.get("error_log") else "初回設計"
-    print(f"\n{'='*60}", flush=True)
-    print(f"[第{trial}回 / 上限{MAX_RETRIES}回]  設計エージェント  ({mode})", flush=True)
-    print(f"{'='*60}", flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info(f"[第{trial}回 / 上限{MAX_RETRIES}回]  設計エージェント  ({mode})")
+    logger.info(f"{'='*60}")
     if state.get("use_provided_topology"):
-        print("  >>> LLM にコンフィグを生成させています（トポロジーは提供済み）...", flush=True)
+        logger.info("  >>> LLM にコンフィグを生成させています（トポロジーは提供済み）...")
     else:
-        print("  >>> LLM にトポロジーとコンフィグを生成させています...", flush=True)
+        logger.info("  >>> LLM にトポロジーとコンフィグを生成させています...")
     result = architect.run(state)
-    print("  <<< 設計完了", flush=True)
+    logger.info("  <<< 設計完了")
     return result
 
 
 def validator_node(state: AgentState) -> dict:
     """検証エージェント。CMLへデプロイし、テスト実行・失敗推論を行う。"""
     trial = state.get("retry_count", 0) + 1
-    print(f"\n[第{trial}回 / 上限{MAX_RETRIES}回]  検証エージェント  開始", flush=True)
+    logger.info(f"\n[第{trial}回 / 上限{MAX_RETRIES}回]  検証エージェント  開始")
     result = validator.run(state)
     return result
 
 
 def report_node(state: AgentState) -> dict:
     """全PASS時の最終レポートを生成する。"""
-    print("\n  >>> 全テスト PASS! 最終レポートを生成しています...", flush=True)
+    logger.info("\n  >>> 全テスト PASS! 最終レポートを生成しています...")
     results = state.get("test_results", [])
     passed = [r for r in results if r["result"] == "PASS"]
     failed = [r for r in results if r["result"] == "FAIL"]
@@ -410,25 +413,24 @@ def _generate_design_docs(state: AgentState, out_dir: Path) -> str:
         f"### 保存先ファイル\n\n{files_list}"
     )
 
-    print(
+    logger.info(
         f"  [Phase D] 設計ドキュメント生成完了: {out_dir} ({len(saved)} ファイル)",
-        flush=True,
     )
     return summary_md
 
 
 def fault_simulate_node(state: AgentState) -> dict:
     """障害シミュレーションエージェント。インターフェース shutdown/no shutdown + 再テストを実行する。"""
-    print(f"\n{'='*60}", flush=True)
-    print("[障害シミュレーション]  開始", flush=True)
-    print(f"{'='*60}", flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info("[障害シミュレーション]  開始")
+    logger.info(f"{'='*60}")
     result = fault_simulator.run(state)
     return result
 
 
 def fault_report_node(state: AgentState) -> dict:
     """障害シミュレーション結果レポートを生成し final_report に追記する。"""
-    print("\n  >>> 障害シミュレーションレポートを生成しています...", flush=True)
+    logger.info("\n  >>> 障害シミュレーションレポートを生成しています...")
     scenario_results: list[FaultScenarioResult] = state.get("fault_scenario_results", [])
 
     if not scenario_results:
@@ -485,7 +487,7 @@ def fault_report_node(state: AgentState) -> dict:
 
 def escalate_node(state: AgentState) -> dict:
     """最大リトライ超過時のエスカレーションレポートを生成する。"""
-    print(f"\n  >>> 上限に達しました。エスカレーションレポートを生成しています...", flush=True)
+    logger.info(f"\n  >>> 上限に達しました。エスカレーションレポートを生成しています...")
     results = state.get("test_results", [])
     result_lines = "\n".join(
         f"| {r['test']} | {'✅ PASS' if r['result'] == 'PASS' else '❌ FAIL'} | {r['detail']} |"
@@ -697,32 +699,31 @@ def dry_run_node(state: AgentState) -> dict:
 
 def troubleshoot_collect_node(state: AgentState) -> dict:
     """Phase H: 既存ラボの全機器から running-config と show コマンドを収集する。"""
-    print(f"\n{'='*60}", flush=True)
-    print("[トラブルシューティング] 機器状態を収集中...", flush=True)
-    print(f"{'='*60}", flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info("[トラブルシューティング] 機器状態を収集中...")
+    logger.info(f"{'='*60}")
     return troubleshooter.run_collect(state)
 
 
 def troubleshoot_diagnose_node(state: AgentState) -> dict:
     """Phase H: 収集した状態と失敗テストを LLM で診断する。"""
     retry = state.get("troubleshoot_retry_count", 0) + 1
-    print(
+    logger.info(
         f"\n[トラブルシューティング 診断 {retry}/{TROUBLESHOOT_MAX_RETRIES}]"
         " 根本原因を分析中...",
-        flush=True,
     )
     return troubleshooter.run_diagnose(state)
 
 
 def troubleshoot_fix_node(state: AgentState) -> dict:
     """Phase H: 診断結果に基づき差分修正コマンドを生成・投入する。"""
-    print("\n[トラブルシューティング] 修正コマンドを生成・投入中...", flush=True)
+    logger.info("\n[トラブルシューティング] 修正コマンドを生成・投入中...")
     return troubleshooter.run_fix(state)
 
 
 def troubleshoot_verify_node(state: AgentState) -> dict:
     """Phase H: 修正後にテストを実行して検証する（デプロイなし）。"""
-    print("\n[トラブルシューティング] 検証テストを実行中...", flush=True)
+    logger.info("\n[トラブルシューティング] 検証テストを実行中...")
     from agentic_ni.agents.validator import TestPlan, _build_test_plan_messages, _execute_test
     from agentic_ni.llm import get_llm
     from agentic_ni.tools import pyats_tools
@@ -730,7 +731,7 @@ def troubleshoot_verify_node(state: AgentState) -> dict:
     llm = get_llm()
     structured_llm = llm.with_structured_output(TestPlan, method="function_calling")
     plan: TestPlan = structured_llm.invoke(_build_test_plan_messages(state))
-    print(f"  テスト計画: {len(plan.tests)} 件", flush=True)
+    logger.info(f"  テスト計画: {len(plan.tests)} 件")
 
     testbed_yaml = pyats_tools.build_testbed(
         state.get("lab_id", ""),
@@ -738,10 +739,10 @@ def troubleshoot_verify_node(state: AgentState) -> dict:
     )
     test_results = []
     for i, item in enumerate(plan.tests, 1):
-        print(f"  ({i}/{len(plan.tests)}) {item.description}", flush=True)
+        logger.info(f"  ({i}/{len(plan.tests)}) {item.description}")
         result = _execute_test(item, testbed_yaml)
         mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
-        print(f"       → {mark}  {result['detail']}", flush=True)
+        logger.info(f"       → {mark}  {result['detail']}")
         test_results.append(result)
 
     return {
@@ -752,7 +753,7 @@ def troubleshoot_verify_node(state: AgentState) -> dict:
 
 def troubleshoot_report_node(state: AgentState) -> dict:
     """Phase H: トラブルシューティング完了レポートを生成する。"""
-    print("\n  >>> トラブルシューティング完了レポートを生成しています...", flush=True)
+    logger.info("\n  >>> トラブルシューティング完了レポートを生成しています...")
     fix_records = state.get("fix_records", [])
     test_results = state.get("test_results", [])
     passed = [r for r in test_results if r["result"] == "PASS"]
@@ -954,7 +955,7 @@ def initial_state(
     topology_yaml = ""
     if use_provided_topology:
         topology_yaml = _load_topology_from_file(prompt_set)
-        print(f"  [トポロジー] configs/{prompt_set}/topology.yaml を読み込みました（コンフィグのみ生成モード）", flush=True)
+        logger.info(f"  [トポロジー] configs/{prompt_set}/topology.yaml を読み込みました（コンフィグのみ生成モード）")
 
     return AgentState(
         requirement=requirement,
@@ -1163,9 +1164,9 @@ def live_precheck_node(state: AgentState) -> dict:
     """
     from agentic_ni.tools import pyats_tools
 
-    print(f"\n{'='*60}", flush=True)
-    print("[Phase I] 実機適用プレチェック 開始", flush=True)
-    print(f"{'='*60}", flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info("[Phase I] 実機適用プレチェック 開始")
+    logger.info(f"{'='*60}")
 
     tools = _get_live_tools(state)
     # ------------------------------------------------------------------
@@ -1174,10 +1175,10 @@ def live_precheck_node(state: AgentState) -> dict:
     try:
         inventory_path = _resolve_inventory_path(state)
         devices = pyats_tools.load_inventory(inventory_path)
-        print(f"  [✅ Level 1] インベントリ読み込み完了: {inventory_path} ({len(devices)} デバイス)", flush=True)
+        logger.info(f"  [✅ Level 1] インベントリ読み込み完了: {inventory_path} ({len(devices)} デバイス)")
     except (FileNotFoundError, ValueError) as exc:
         msg = f"インベントリ読み込みエラー: {exc}"
-        print(f"  [❌ Level 1] {msg}", flush=True)
+        logger.info(f"  [❌ Level 1] {msg}")
         return {
             "error_log": msg,
             "live_apply_records": [],
@@ -1187,18 +1188,18 @@ def live_precheck_node(state: AgentState) -> dict:
     # ------------------------------------------------------------------
     # Level 2: SSH 疎通確認
     # ------------------------------------------------------------------
-    print(f"  [Level 2] SSH 疎通確認中...", flush=True)
+    logger.info(f"  [Level 2] SSH 疎通確認中...")
     connectivity = tools.check_connectivity(devices)
     failed_conn = [name for name, ok in connectivity.items() if not ok]
 
     for name, ok in connectivity.items():
         host = devices[name].get("host", "?")
         mark = "✅" if ok else "❌"
-        print(f"    {mark} {name} ({host})", flush=True)
+        logger.info(f"    {mark} {name} ({host})")
 
     if failed_conn:
         msg = f"SSH 疎通確認に失敗したデバイス: {', '.join(failed_conn)}"
-        print(f"  [❌ Level 2] {msg}", flush=True)
+        logger.info(f"  [❌ Level 2] {msg}")
         # 失敗デバイスだけ記録して中断
         records: list[LiveApplyRecord] = [
             LiveApplyRecord(
@@ -1222,21 +1223,21 @@ def live_precheck_node(state: AgentState) -> dict:
             "live_apply_records": records,
             "final_report": f"# Phase I プレチェック失敗\n\n{msg}",
         }
-    print(f"  [✅ Level 2] 全 {len(devices)} デバイスの SSH 疎通確認 OK", flush=True)
+    logger.info(f"  [✅ Level 2] 全 {len(devices)} デバイスの SSH 疎通確認 OK")
 
     # ------------------------------------------------------------------
     # Level 3: running-config バックアップ取得
     # ------------------------------------------------------------------
-    print(f"  [Level 3] running-config バックアップ取得中...", flush=True)
+    logger.info(f"  [Level 3] running-config バックアップ取得中...")
     try:
         backups = tools.backup_running_config(devices)
-        print(f"  [✅ Level 3] バックアップ取得完了", flush=True)
+        logger.info(f"  [✅ Level 3] バックアップ取得完了")
         for name, cfg in backups.items():
             lines = len([l for l in cfg.splitlines() if l.strip()])
-            print(f"    ✅ {name} — {lines} 行", flush=True)
+            logger.info(f"    ✅ {name} — {lines} 行")
     except RuntimeError as exc:
         msg = str(exc)
-        print(f"  [❌ Level 3] {msg}", flush=True)
+        logger.info(f"  [❌ Level 3] {msg}")
         records = [
             LiveApplyRecord(
                 device=name,
@@ -1283,7 +1284,7 @@ def live_precheck_node(state: AgentState) -> dict:
         for name in devices
     ]
 
-    print(f"\n  [Phase I] プレチェック完了 — {len(records)} デバイス準備 OK", flush=True)
+    logger.info(f"\n  [Phase I] プレチェック完了 — {len(records)} デバイス準備 OK")
     return {
         "live_apply_records": records,
         "error_log": "",
@@ -1361,10 +1362,10 @@ def human_confirm_live_node(state: AgentState) -> dict:
     """
     confirmation_msg = _build_confirmation_message(state)
 
-    print(f"\n{'='*60}", flush=True)
-    print("[Phase I] Human 承認待ち...", flush=True)
-    print(f"{'='*60}", flush=True)
-    print(confirmation_msg, flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info("[Phase I] Human 承認待ち...")
+    logger.info(f"{'='*60}")
+    logger.info(confirmation_msg)
 
     decision_payload: dict = interrupt(
         {
@@ -1386,7 +1387,7 @@ def human_confirm_live_node(state: AgentState) -> dict:
     else:
         decision = "no"
 
-    print(f"\n  Human の決定: {decision}", flush=True)
+    logger.info(f"\n  Human の決定: {decision}")
 
     updates: dict = {"live_human_decision": decision}
 
@@ -1507,9 +1508,9 @@ def live_apply_node(state: AgentState) -> dict:
     records: list[LiveApplyRecord] = list(state.get("live_apply_records", []))
     device_configs = load_device_configs(state)
 
-    print(f"\n{'='*60}", flush=True)
-    print("[Phase I] 実機コンフィグ投入 開始", flush=True)
-    print(f"{'='*60}", flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info("[Phase I] 実機コンフィグ投入 開始")
+    logger.info(f"{'='*60}")
 
     tools = _get_live_tools(state)
     # インベントリを再読み込みして接続パラメータを取得
@@ -1518,7 +1519,7 @@ def live_apply_node(state: AgentState) -> dict:
         devices = pyats_tools.load_inventory(inventory_path)
     except (FileNotFoundError, ValueError) as exc:
         msg = f"インベントリ読み込みエラー（apply フェーズ）: {exc}"
-        print(f"  [❌] {msg}", flush=True)
+        logger.info(f"  [❌] {msg}")
         return {"error_log": msg}
 
     updated_records: list[LiveApplyRecord] = []
@@ -1529,17 +1530,17 @@ def live_apply_node(state: AgentState) -> dict:
         cfg = devices.get(name)
         if cfg is None:
             # インベントリにないデバイスはスキップ（エラーにしない）
-            print(f"  ⚠️  {name}: インベントリに見つからないためスキップ", flush=True)
+            logger.info(f"  ⚠️  {name}: インベントリに見つからないためスキップ")
             updated_records.append(rec)
             continue
 
         config_text = device_configs.get(name, "")
         if not config_text.strip():
-            print(f"  ⚠️  {name}: コンフィグが空のためスキップ", flush=True)
+            logger.info(f"  ⚠️  {name}: コンフィグが空のためスキップ")
             updated_records.append(rec)
             continue
 
-        print(f"  [{name}] コンフィグ投入中 ({cfg['host']}, {cfg.get('apply_mode', 'config_merge')})...", flush=True)
+        logger.info(f"  [{name}] コンフィグ投入中 ({cfg['host']}, {cfg.get('apply_mode', 'config_merge')})...")
         apply_result = tools.apply_config(name, cfg, config_text)
 
         updated_rec: LiveApplyRecord = {
@@ -1553,22 +1554,22 @@ def live_apply_node(state: AgentState) -> dict:
         }
 
         if apply_result["success"]:
-            print(f"    ✅ {name}: 投入成功", flush=True)
+            logger.info(f"    ✅ {name}: 投入成功")
         else:
-            print(f"    ❌ {name}: 投入失敗 — {apply_result['error']}", flush=True)
+            logger.info(f"    ❌ {name}: 投入失敗 — {apply_result['error']}")
             failed_devices.append(name)
 
             # Level 6: 自動ロールバック
             backup = rec.get("backup_config", "")
             if backup.strip():
-                print(f"    ⏪ {name}: バックアップを使って自動ロールバック中...", flush=True)
+                logger.info(f"    ⏪ {name}: バックアップを使って自動ロールバック中...")
                 rb_result = tools.rollback_config(name, cfg, backup)
                 updated_rec["rollback_done"] = rb_result["success"]
                 updated_rec["rollback_error"] = rb_result["error"]
                 mark = "✅" if rb_result["success"] else "❌"
-                print(f"    {mark} {name}: ロールバック {'成功' if rb_result['success'] else '失敗'}", flush=True)
+                logger.info(f"    {mark} {name}: ロールバック {'成功' if rb_result['success'] else '失敗'}")
             else:
-                print(f"    ⚠️  {name}: バックアップなし — ロールバックをスキップ", flush=True)
+                logger.info(f"    ⚠️  {name}: バックアップなし — ロールバックをスキップ")
 
         updated_records.append(updated_rec)
 
@@ -1581,7 +1582,7 @@ def live_apply_node(state: AgentState) -> dict:
 
     total = len([r for r in updated_records if r.get("applied_config")])
     succeeded = len([r for r in updated_records if r.get("apply_success")])
-    print(f"\n  [Phase I] 投入完了 — {succeeded}/{total} デバイス成功", flush=True)
+    logger.info(f"\n  [Phase I] 投入完了 — {succeeded}/{total} デバイス成功")
 
     return {
         "live_apply_records": updated_records,
@@ -1604,9 +1605,9 @@ def live_rollback_node(state: AgentState) -> dict:
 
     records: list[LiveApplyRecord] = list(state.get("live_apply_records", []))
 
-    print(f"\n{'='*60}", flush=True)
-    print("[Phase I] rollback-only モード — バックアップを復元中", flush=True)
-    print(f"{'='*60}", flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info("[Phase I] rollback-only モード — バックアップを復元中")
+    logger.info(f"{'='*60}")
 
     tools = _get_live_tools(state)
     try:
@@ -1614,7 +1615,7 @@ def live_rollback_node(state: AgentState) -> dict:
         devices = pyats_tools.load_inventory(inventory_path)
     except (FileNotFoundError, ValueError) as exc:
         msg = f"インベントリ読み込みエラー（rollback フェーズ）: {exc}"
-        print(f"  [❌] {msg}", flush=True)
+        logger.info(f"  [❌] {msg}")
         return {"error_log": msg}
 
     updated_records: list[LiveApplyRecord] = []
@@ -1624,17 +1625,17 @@ def live_rollback_node(state: AgentState) -> dict:
         name = rec["device"]
         cfg = devices.get(name)
         if cfg is None:
-            print(f"  ⚠️  {name}: インベントリに見つからないためスキップ", flush=True)
+            logger.info(f"  ⚠️  {name}: インベントリに見つからないためスキップ")
             updated_records.append(rec)
             continue
 
         backup = rec.get("backup_config", "")
         if not backup.strip():
-            print(f"  ⚠️  {name}: バックアップなし — スキップ", flush=True)
+            logger.info(f"  ⚠️  {name}: バックアップなし — スキップ")
             updated_records.append(rec)
             continue
 
-        print(f"  [{name}] バックアップを復元中 ({cfg['host']})...", flush=True)
+        logger.info(f"  [{name}] バックアップを復元中 ({cfg['host']})...")
         rb_result = tools.rollback_config(name, cfg, backup)
 
         updated_rec: LiveApplyRecord = {
@@ -1645,7 +1646,7 @@ def live_rollback_node(state: AgentState) -> dict:
         updated_records.append(updated_rec)
 
         mark = "✅" if rb_result["success"] else "❌"
-        print(f"    {mark} {name}: ロールバック {'成功' if rb_result['success'] else '失敗 — ' + rb_result['error']}", flush=True)
+        logger.info(f"    {mark} {name}: ロールバック {'成功' if rb_result['success'] else '失敗 — ' + rb_result['error']}")
         if not rb_result["success"]:
             failed_rollbacks.append(name)
 
@@ -1654,7 +1655,7 @@ def live_rollback_node(state: AgentState) -> dict:
         error_log = f"ロールバックに失敗したデバイス: {', '.join(failed_rollbacks)}"
 
     done = len([r for r in updated_records if r.get("rollback_done")])
-    print(f"\n  [Phase I] ロールバック完了 — {done}/{len(records)} デバイス成功", flush=True)
+    logger.info(f"\n  [Phase I] ロールバック完了 — {done}/{len(records)} デバイス成功")
 
     return {
         "live_apply_records": updated_records,
@@ -1700,13 +1701,13 @@ def live_verify_node(state: AgentState) -> dict:
     from agentic_ni.tools import pyats_tools
     from agentic_ni.agents.validator import TestItem, _execute_test
 
-    print(f"\n{'='*60}", flush=True)
-    print("[Phase I] 実機 pyATS 検証 開始", flush=True)
-    print(f"{'='*60}", flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info("[Phase I] 実機 pyATS 検証 開始")
+    logger.info(f"{'='*60}")
 
     test_plan_items: list[dict] = state.get("test_plan_items", [])
     if not test_plan_items:
-        print("  ⚠️  テスト計画がありません（test_plan_items が空）—スキップ", flush=True)
+        logger.info("  ⚠️  テスト計画がありません（test_plan_items が空）—スキップ")
         return {"live_test_results": []}
 
     # インベントリを読み込んで実機向け testbed YAML を生成
@@ -1716,7 +1717,7 @@ def live_verify_node(state: AgentState) -> dict:
         testbed_yaml = pyats_tools.build_testbed_from_inventory(devices)
     except (FileNotFoundError, ValueError) as exc:
         msg = f"インベントリ読み込みエラー（verify フェーズ）: {exc}"
-        print(f"  [❌] {msg}", flush=True)
+        logger.info(f"  [❌] {msg}")
         return {
             "live_test_results": [
                 {"test": "live_verify_setup", "result": "FAIL", "detail": msg}
@@ -1729,13 +1730,13 @@ def live_verify_node(state: AgentState) -> dict:
         try:
             test_items.append(TestItem(**item_dict))
         except Exception as exc:  # noqa: BLE001
-            print(f"  ⚠️  TestItem の復元に失敗: {exc}", flush=True)
+            logger.info(f"  ⚠️  TestItem の復元に失敗: {exc}")
 
-    print(f"  テスト計画: {len(test_items)} 件 [実機]", flush=True)
+    logger.info(f"  テスト計画: {len(test_items)} 件 [実機]")
     live_test_results: list = []
 
     for i, item in enumerate(test_items, 1):
-        print(f"  ({i}/{len(test_items)}) {item.description} [実機]", flush=True)
+        logger.info(f"  ({i}/{len(test_items)}) {item.description} [実機]")
         try:
             result = _execute_test(item, testbed_yaml)
         except ImportError:
@@ -1745,13 +1746,12 @@ def live_verify_node(state: AgentState) -> dict:
                 "detail": "pyATS/Genie が未インストールです。uv sync --extra network を実行してください。",
             }
         mark = "✅ PASS" if result["result"] == "PASS" else "❌ FAIL"
-        print(f"       → {mark}  {result['detail']}", flush=True)
+        logger.info(f"       → {mark}  {result['detail']}")
         live_test_results.append(result)
 
     passed = sum(1 for r in live_test_results if r["result"] == "PASS")
-    print(
+    logger.info(
         f"\n  [Phase I] 実機検証完了 — {passed}/{len(live_test_results)} テスト PASS",
-        flush=True,
     )
 
     return {"live_test_results": live_test_results}
@@ -1771,7 +1771,7 @@ def live_report_node(state: AgentState) -> dict:
     decision: str = state.get("live_human_decision", "yes")
     is_rollback_only: bool = decision == "rollback-only"
 
-    print("\n  >>> 実機適用レポートを生成しています...", flush=True)
+    logger.info("\n  >>> 実機適用レポートを生成しています...")
 
     lines: list[str] = [
         "",
@@ -2086,9 +2086,9 @@ def _run_live_apply_flow(
     import time
     from langgraph.types import Command
 
-    print(f"\n{'='*60}", flush=True)
-    print("[Phase I] 実機適用モード 開始", flush=True)
-    print(f"{'='*60}", flush=True)
+    logger.info(f"\n{'='*60}")
+    logger.info("[Phase I] 実機適用モード 開始")
+    logger.info(f"{'='*60}")
 
     # CML 結果を引き継いで live apply 初期状態を構築
     live_state = initial_state_apply_to_live(
@@ -2122,7 +2122,7 @@ def _run_live_apply_flow(
         msg_state.update(
             {k: partial[k] for k in ("live_apply_records", "test_results") if k in partial}
         )
-        print("\n" + _build_confirmation_message(msg_state), flush=True)
+        logger.info("\n" + _build_confirmation_message(msg_state))
 
     # 人間の入力を取得
     import sys
@@ -2149,18 +2149,28 @@ def _run_live_apply_flow(
     )
 
     print()
-    print(result.get("final_report", "(レポートなし)"), flush=True)
+    logger.info(result.get("final_report", "(レポートなし)"))
 
 
 def main() -> None:
     """CLI エントリポイント。"""
     import sys
+    from agentic_ni.logger import configure_logging
 
     args = sys.argv[1:]
 
+    # --verbose / --quiet の早期処理（ログ設定を最初に確定させる）
+    verbose = "--verbose" in args or "-v" in args
+    quiet = "--quiet" in args or "-q" in args
+    if verbose:
+        args = [a for a in args if a not in ("--verbose", "-v")]
+    if quiet:
+        args = [a for a in args if a not in ("--quiet", "-q")]
+    configure_logging(verbose=verbose, quiet=quiet)
+
     # 引数なし or --help / -h: ヘルプを表示して終了
     if not args or "--help" in args or "-h" in args:
-        print(
+        logger.info(
             "使い方: agentic-ni <プロンプトセット名> [オプション]\n"
             "\n"
             "要件はプロンプトセット内の requirement.md に記載してください。\n"
@@ -2181,6 +2191,8 @@ def main() -> None:
             "  --rag-index [<dir>]    rag/ のテキストファイルを知識ベースに索引化する（要 chromadb）\n"
             "  --rag-clear-knowledge  知識ベースのインデックスを全消去する\n"
             "  --rag-stats            RAGストアの保存件数と保存場所を表示して終了する\n"
+            "  --verbose / -v         DEBUG レベルのログを表示する（タイムスタンプ付き）\n"
+            "  --quiet / -q           WARNING 以上のログのみ表示する\n"
             "  -h / --help            このヘルプを表示して終了する\n"
             "\n"
             "例:\n"
@@ -2382,11 +2394,11 @@ def main() -> None:
             from agentic_ni.tools import cml_tools as _cml
             found = _cml.find_lab_by_title(lab_title)
             if found is None:
-                print(
+                logger.info(
                     f"エラー: ラボ '{lab_title}' が見つかりません。",
                     file=sys.stderr,
                 )
-                print(
+                logger.info(
                     f"  先に通常モードで実行してラボを作成するか、--troubleshoot に lab_id を明示してください。",
                     file=sys.stderr,
                 )
@@ -2407,7 +2419,7 @@ def main() -> None:
     if use_provided_topology:
         topology_path = Path("configs") / prompt_set / "topology.yaml"
         if not topology_path.exists():
-            print(
+            logger.info(
                 f"エラー: --use-topology が指定されましたが、トポロジーファイルが見つかりません。\n"
                 f"  期待パス: {topology_path}",
                 file=sys.stderr,
@@ -2436,7 +2448,7 @@ def main() -> None:
     if apply_to_live and not dry_run:
         test_results = result.get("test_results", [])
         if not test_results or not all(r["result"] == "PASS" for r in test_results):
-            print(
+            logger.info(
                 "\nCML 検証がすべて PASS していないため、実機適用をスキップします。",
                 file=sys.stderr,
             )
