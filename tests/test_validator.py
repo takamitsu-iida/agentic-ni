@@ -530,3 +530,28 @@ class TestRunTests:
         assert results[0]["result"] == "PASS"
         assert results[1]["result"] == "FAIL"
         assert results[2]["result"] == "PASS"
+
+    def test_parallel_same_device_uses_lock(self, monkeypatch):
+        """並列モードで同一デバイスのテストがロックで直列化されること。"""
+        monkeypatch.setattr("agentic_ni.agents.validator.MAX_TEST_WORKERS", 4)
+        # 全テストが同じデバイス R1 を対象にする
+        items = [
+            _make_test_item("ospf_neighbors", "R1", description=f"test-{i}")
+            for i in range(4)
+        ]
+        plan = TestPlan(tests=items, rationale="test")
+        call_order: list[int] = []
+
+        def fake_execute(item: TestItem, _: str) -> TestResult:
+            idx = int(item.description.split("-")[1])
+            call_order.append(idx)
+            return _pass_result(item.description)
+
+        with patch("agentic_ni.agents.validator._execute_test", side_effect=fake_execute):
+            results = _run_tests(plan, "testbed_yaml")
+
+        # 全テストが完了していること
+        assert len(results) == 4
+        assert all(r["result"] == "PASS" for r in results)
+        # R1 へのアクセスがシリアライズされているので call_order は連続（重複なし）
+        assert len(call_order) == 4

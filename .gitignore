@@ -1,8 +1,8 @@
 # githubのpythonテンプレート
 # https://github.com/github/gitignore
 
-
-frr-configs/
+# 生成したコンフィグは追跡不要
+configs/
 
 # pyATS ルーター操作ログ
 logs/

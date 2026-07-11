@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
+from threading import Lock
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -21,6 +23,11 @@ logger = get_logger(__name__)
 # テスト並列実行の最大ワーカー数（環境変数 MAX_TEST_WORKERS で上書き可能）。
 # 1 を指定すると逐次実行（デバッグ・接続安定性優先）になる。
 MAX_TEST_WORKERS: int = int(os.getenv("MAX_TEST_WORKERS", "8"))
+
+# デバイス単位のロック（同一デバイスへの同時接続を防止）。
+# pyATS/Unicon は接続時にターミナル初期化コマンドを送るため、同じデバイスに
+# 複数スレッドが同時接続するとコマンドが交錯してコンソールが壊れる。
+_device_locks: dict[str, Lock] = defaultdict(Lock)
 
 # ---------------------------------------------------------------------------
 # Pydantic スキーマ
@@ -273,11 +280,9 @@ def _run_tests(plan: TestPlan, testbed_yaml: str) -> list[TestResult]:
     """テスト計画を実行し、元の順序で TestResult リストを返す（Strategy D: 並列実行）。
 
     ``MAX_TEST_WORKERS`` が 1 の場合、または計画が 1 件以下の場合は逐次実行する。
-    それ以外は ``ThreadPoolExecutor`` で同時実行し、完了したテストから都度ログを出力する。
-    結果は常に ``plan.tests`` の元の順序で返す。
-
-    同一デバイスへの並列接続が問題になる場合は環境変数 ``MAX_TEST_WORKERS=1`` で
-    逐次実行に切り替えられる。
+    それ以外は ``ThreadPoolExecutor`` で実行し、**同一デバイスへの接続はデバイス単位
+    のロックで逐次化**する（並列接続によるコンソール汚染を防止）。
+    異なるデバイスへのテストは引き続き並列実行される。
 
     Args:
         plan: LLM が生成したテスト計画。
@@ -300,11 +305,20 @@ def _run_tests(plan: TestPlan, testbed_yaml: str) -> list[TestResult]:
             results.append(result)
         return results
 
-    # --- 並列実行 ---
+    def _execute_with_device_lock(item: TestItem) -> TestResult:
+        """デバイス単位のロックを取得してテストを実行する。
+
+        同一デバイスへの同時接続を防止し、Unicon のターミナル初期化コマンドが
+        複数スレッドから重複送信されるのを防ぐ。
+        """
+        with _device_locks[item.device]:
+            return _execute_test(item, testbed_yaml)
+
+    # --- 並列実行（デバイス単位でロック）---
     results_by_index: dict[int, TestResult] = {}
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_index = {
-            executor.submit(_execute_test, item, testbed_yaml): i
+            executor.submit(_execute_with_device_lock, item): i
             for i, item in enumerate(plan.tests)
         }
         for future in as_completed(future_to_index):
