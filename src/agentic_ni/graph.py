@@ -35,6 +35,82 @@ MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "5"))
 TROUBLESHOOT_MAX_RETRIES: int = int(os.getenv("TROUBLESHOOT_MAX_RETRIES", "3"))
 
 
+
+# ---------------------------------------------------------------------------
+# Q2: 中断時のラボ自動クリーンアップ
+# ---------------------------------------------------------------------------
+
+# このプロセスが作成した CML ラボ ID のリスト。
+# SIGINT / SIGTERM 受信時に削除される。既存ラボ（troubleshoot/analyze 用）は登録しない。
+_cleanup_lab_ids: list[str] = []
+
+
+def _register_lab_for_cleanup(lab_id: str) -> None:
+    """新規作成したラボをクリーンアップ対象として登録する。"""
+    if lab_id and lab_id not in _cleanup_lab_ids:
+        _cleanup_lab_ids.append(lab_id)
+        logger.debug(f"  [クリーンアップ登録] lab_id={lab_id}")
+
+
+def _perform_lab_cleanup() -> None:
+    """登録済みの CML ラボをすべて削除する（ベストエフォート）。"""
+    if not _cleanup_lab_ids:
+        return
+    try:
+        from agentic_ni.tools import cml_tools
+    except ImportError:
+        return
+    for lab_id in list(_cleanup_lab_ids):
+        try:
+            logger.info(f"\n  [クリーンアップ] ラボ {lab_id} を削除中...")
+            cml_tools.delete_lab(lab_id)
+            logger.info(f"  [クリーンアップ] ラボ {lab_id} を削除しました。")
+            _cleanup_lab_ids.remove(lab_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"  [クリーンアップ] ラボ {lab_id} の削除に失敗しました: {exc}")
+
+
+def _ask_and_cleanup() -> None:
+    """中断時にラボを削除するかどうかをユーザーに確認する。
+
+    登録済みラボが存在しない場合は何もしない。
+    端末が非対話的（EOFError）の場合はラボを保持する。
+    """
+    if not _cleanup_lab_ids:
+        return
+    print()
+    print("  作成したラボ:")
+    for lab_id in _cleanup_lab_ids:
+        print(f"    - {lab_id}")
+    print()
+    try:
+        answer = input("  このラボを削除しますか？ [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n  ラボを保持します。")
+        return
+    if answer in ("y", "yes"):
+        _perform_lab_cleanup()
+    else:
+        print("  ラボを保持します。CML で確認してください: " + ", ".join(_cleanup_lab_ids))
+
+
+def _setup_interrupt_cleanup() -> None:
+    """SIGTERM シグナルハンドラーを登録する。
+
+    SIGTERM（kill コマンド）では CML ラボを自動削除する。
+    SIGINT（Ctrl+C）は Python デフォルト（KeyboardInterrupt）に任せ、
+    main() の try/except で _ask_and_cleanup() を呼び出してユーザーに確認する。
+    """
+    import signal
+
+    def _handle_sigterm(signum: int, frame: Any) -> None:
+        logger.info("\n  [SIGTERM] 終了シグナルを受信しました。CML ラボをクリーンアップしています...")
+        _perform_lab_cleanup()
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
+
 # ---------------------------------------------------------------------------
 # ノード定義
 # ---------------------------------------------------------------------------
@@ -61,6 +137,11 @@ def validator_node(state: AgentState) -> dict:
     trial = state.get("retry_count", 0) + 1
     logger.info(f"\n[第{trial}回 / 上限{MAX_RETRIES}回]  検証エージェント  開始")
     result = validator.run(state)
+    # このプロセスが新規作成したラボをクリーンアップ対象として登録する。
+    # 既存ラボを再利用した場合（troubleshoot/retry）は登録しない。
+    new_lab_id = result.get("lab_id", "")
+    if new_lab_id and new_lab_id != state.get("lab_id", ""):
+        _register_lab_for_cleanup(new_lab_id)
     return result
 
 
@@ -2167,6 +2248,7 @@ def main() -> None:
     if quiet:
         args = [a for a in args if a not in ("--quiet", "-q")]
     configure_logging(verbose=verbose, quiet=quiet)
+    _setup_interrupt_cleanup()
 
     # 引数なし or --help / -h: ヘルプを表示して終了
     if not args or "--help" in args or "-h" in args:
@@ -2352,114 +2434,121 @@ def main() -> None:
         print()
     print("処理を開始します...\n")
 
-    # 分析モード
-    if analyze_mode:
-        if not analyze_lab_id:
-            lab_title = f"agentic-ni-{prompt_set}"
-            from agentic_ni.tools import cml_tools as _cml
-            found = _cml.find_lab_by_title(lab_title)
-            if found is None:
-                print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
-                print(f"  先に通常モードで実行してラボを作成するか、--analyze に lab_id を明示してください。", file=sys.stderr)
-                sys.exit(1)
-            analyze_lab_id = found
-            print(f"ラボを自動検出: {lab_title} (ID={analyze_lab_id})")
-        app = compile_graph_analyze()
-        result = app.invoke(initial_state_analyze(analyze_lab_id, prompt_set))
-        print(result.get("final_report", "(レポートなし)"))
-        return
+    try:
 
-    # 改善モード
-    if improve_mode:
-        if not improve_lab_id:
-            lab_title = f"agentic-ni-{prompt_set}"
-            from agentic_ni.tools import cml_tools as _cml
-            found = _cml.find_lab_by_title(lab_title)
-            if found is None:
-                print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
-                print(f"  先に通常モードで実行してラボを作成するか、--improve に lab_id を明示してください。", file=sys.stderr)
-                sys.exit(1)
-            improve_lab_id = found
-            print(f"ラボを自動検出: {lab_title} (ID={improve_lab_id})")
-        app = compile_graph_improve()
-        result = app.invoke(initial_state_improve(improve_lab_id, improve_request, prompt_set))
-        print(result.get("final_report", "(レポートなし)"))
-        return
+        # 分析モード
+        if analyze_mode:
+            if not analyze_lab_id:
+                lab_title = f"agentic-ni-{prompt_set}"
+                from agentic_ni.tools import cml_tools as _cml
+                found = _cml.find_lab_by_title(lab_title)
+                if found is None:
+                    print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
+                    print(f"  先に通常モードで実行してラボを作成するか、--analyze に lab_id を明示してください。", file=sys.stderr)
+                    sys.exit(1)
+                analyze_lab_id = found
+                print(f"ラボを自動検出: {lab_title} (ID={analyze_lab_id})")
+            app = compile_graph_analyze()
+            result = app.invoke(initial_state_analyze(analyze_lab_id, prompt_set))
+            print(result.get("final_report", "(レポートなし)"))
+            return
 
-    # トラブルシューティングモード
-    if troubleshoot_mode:
-        if not troubleshoot_lab_id:
-            # lab_id 省略時はラボタイトル "agentic-ni-{prompt_set}" で自動検索
-            lab_title = f"agentic-ni-{prompt_set}"
-            from agentic_ni.tools import cml_tools as _cml
-            found = _cml.find_lab_by_title(lab_title)
-            if found is None:
+        # 改善モード
+        if improve_mode:
+            if not improve_lab_id:
+                lab_title = f"agentic-ni-{prompt_set}"
+                from agentic_ni.tools import cml_tools as _cml
+                found = _cml.find_lab_by_title(lab_title)
+                if found is None:
+                    print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
+                    print(f"  先に通常モードで実行してラボを作成するか、--improve に lab_id を明示してください。", file=sys.stderr)
+                    sys.exit(1)
+                improve_lab_id = found
+                print(f"ラボを自動検出: {lab_title} (ID={improve_lab_id})")
+            app = compile_graph_improve()
+            result = app.invoke(initial_state_improve(improve_lab_id, improve_request, prompt_set))
+            print(result.get("final_report", "(レポートなし)"))
+            return
+
+        # トラブルシューティングモード
+        if troubleshoot_mode:
+            if not troubleshoot_lab_id:
+                # lab_id 省略時はラボタイトル "agentic-ni-{prompt_set}" で自動検索
+                lab_title = f"agentic-ni-{prompt_set}"
+                from agentic_ni.tools import cml_tools as _cml
+                found = _cml.find_lab_by_title(lab_title)
+                if found is None:
+                    logger.info(
+                        f"エラー: ラボ '{lab_title}' が見つかりません。",
+                        file=sys.stderr,
+                    )
+                    logger.info(
+                        f"  先に通常モードで実行してラボを作成するか、--troubleshoot に lab_id を明示してください。",
+                        file=sys.stderr,
+                    )
+                    print(f"    利用例: agentic-ni {prompt_set}", file=sys.stderr)
+                    sys.exit(1)
+                troubleshoot_lab_id = found
+                print(f"ラボを自動検出: {lab_title} (ID={troubleshoot_lab_id})")
+            app = compile_graph_troubleshoot()
+            result = app.invoke(
+                initial_state_troubleshoot(troubleshoot_lab_id, troubleshoot_issue, prompt_set)
+            )
+            print(result.get("final_report", "(レポートなし)"))
+            return
+
+        app = compile_graph_dry_run() if dry_run else compile_graph()
+
+        # --use-topology: トポロジーファイルの存在チェック
+        if use_provided_topology:
+            topology_path = Path("configs") / prompt_set / "topology.yaml"
+            if not topology_path.exists():
                 logger.info(
-                    f"エラー: ラボ '{lab_title}' が見つかりません。",
+                    f"エラー: --use-topology が指定されましたが、トポロジーファイルが見つかりません。\n"
+                    f"  期待パス: {topology_path}",
                     file=sys.stderr,
                 )
+                sys.exit(1)
+
+        # --fault-sim 時に同名ラボが既存かどうか確認し、あればデプロイをスキップ
+        skip_deploy = False
+        existing_lab_id = ""
+        if fault_simulation_enabled and not dry_run:
+            lab_title = f"agentic-ni-{prompt_set}"
+            try:
+                from agentic_ni.tools import cml_tools as _cml
+                found = _cml.find_lab_by_title(lab_title)
+                if found:
+                    skip_deploy = True
+                    existing_lab_id = found
+                    print(f"既存ラボを検出: {lab_title} (ID={found}) → デプロイをスキップして障害検証を実施します")
+            except Exception:  # noqa: BLE001
+                pass  # CML 未接続時は無視して通常フローへ
+
+        result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id, use_provided_topology))
+        print(result.get("final_report", "(レポートなし)"))
+
+        # Phase I: 実機適用モード（--apply-to-live 指定時）
+        if apply_to_live and not dry_run:
+            test_results = result.get("test_results", [])
+            if not test_results or not all(r["result"] == "PASS" for r in test_results):
                 logger.info(
-                    f"  先に通常モードで実行してラボを作成するか、--troubleshoot に lab_id を明示してください。",
+                    "\nCML 検証がすべて PASS していないため、実機適用をスキップします。",
                     file=sys.stderr,
                 )
-                print(f"    利用例: agentic-ni {prompt_set}", file=sys.stderr)
                 sys.exit(1)
-            troubleshoot_lab_id = found
-            print(f"ラボを自動検出: {lab_title} (ID={troubleshoot_lab_id})")
-        app = compile_graph_troubleshoot()
-        result = app.invoke(
-            initial_state_troubleshoot(troubleshoot_lab_id, troubleshoot_issue, prompt_set)
-        )
-        print(result.get("final_report", "(レポートなし)"))
-        return
-
-    app = compile_graph_dry_run() if dry_run else compile_graph()
-
-    # --use-topology: トポロジーファイルの存在チェック
-    if use_provided_topology:
-        topology_path = Path("configs") / prompt_set / "topology.yaml"
-        if not topology_path.exists():
-            logger.info(
-                f"エラー: --use-topology が指定されましたが、トポロジーファイルが見つかりません。\n"
-                f"  期待パス: {topology_path}",
-                file=sys.stderr,
+            _run_live_apply_flow(
+                cml_state=result,
+                prompt_set=prompt_set,
+                inventory_path=live_inventory_path,
+                live_verify=live_verify,
             )
-            sys.exit(1)
 
-    # --fault-sim 時に同名ラボが既存かどうか確認し、あればデプロイをスキップ
-    skip_deploy = False
-    existing_lab_id = ""
-    if fault_simulation_enabled and not dry_run:
-        lab_title = f"agentic-ni-{prompt_set}"
-        try:
-            from agentic_ni.tools import cml_tools as _cml
-            found = _cml.find_lab_by_title(lab_title)
-            if found:
-                skip_deploy = True
-                existing_lab_id = found
-                print(f"既存ラボを検出: {lab_title} (ID={found}) → デプロイをスキップして障害検証を実施します")
-        except Exception:  # noqa: BLE001
-            pass  # CML 未接続時は無視して通常フローへ
 
-    result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id, use_provided_topology))
-    print(result.get("final_report", "(レポートなし)"))
-
-    # Phase I: 実機適用モード（--apply-to-live 指定時）
-    if apply_to_live and not dry_run:
-        test_results = result.get("test_results", [])
-        if not test_results or not all(r["result"] == "PASS" for r in test_results):
-            logger.info(
-                "\nCML 検証がすべて PASS していないため、実機適用をスキップします。",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        _run_live_apply_flow(
-            cml_state=result,
-            prompt_set=prompt_set,
-            inventory_path=live_inventory_path,
-            live_verify=live_verify,
-        )
-
+    except KeyboardInterrupt:
+        print("\n\n  [Ctrl+C] 処理を中断しました。")
+        _ask_and_cleanup()
+        sys.exit(130)
 
 if __name__ == "__main__":
     main()

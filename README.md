@@ -2278,10 +2278,149 @@ def split_into_pods(state: AgentState) -> list[Send]:
 
 **完了基準**: 50 台規模のトポロジーが複数ポッドに分割され、各ポッドが独立して設計・検証できること。
 
+---
 
+### Phase Q — コード品質・運用改善
 
-済　loggingモジュールへの統一
-中断時のラボクリーンアップ
-チェックポインターによる再開
-プロンプトキャッシング
-Few-shot例のプロンプト追加
+**目標**: 実運用に向けた観測性・信頼性・UX の向上。スケーラビリティ強化（Phase S）とは独立して実施できる改善群。
+
+#### 進捗一覧
+
+| 優先度 | 改善項目 | 進捗 |
+|---|---|---|
+| **高** | [Q1: logging モジュールへの統一](#q1--logging-モジュールへの統一) | ✅ 完了 |
+| **高** | [Q2: 中断時のラボ自動クリーンアップ](#q2--中断時のラボ自動クリーンアップ) | ✅ 完了 |
+| **中** | [Q3: チェックポインターによる再開](#q3--チェックポインターによる再開) | ☐ 未着手 |
+| **中** | [Q4: プロンプトキャッシング](#q4--プロンプトキャッシング) | ☐ 未着手 |
+| **中** | [Q5: Few-shot 例のプロンプト追加](#q5--few-shot-例のプロンプト追加) | ☐ 未着手 |
+
+---
+
+#### Q1 — logging モジュールへの統一
+
+**課題**: 全体に散在していた `print(msg, flush=True)` は可視性・制御性が低く、ログレベルによる表示切り替えができなかった。
+
+**変更ファイル**:
+
+| ファイル | 変更内容 |
+|---|---|
+| `src/agentic_ni/logger.py` | 新設。`get_logger()` / `configure_logging()` を一元管理 |
+| `src/agentic_ni/llm.py` | API キー未設定時にスタックトレースなしで分かりやすいエラーメッセージを表示して終了するよう改善 |
+| `src/agentic_ni/graph.py` | `main()` に `--verbose` / `-v` および `--quiet` / `-q` オプションを追加 |
+| 各エージェント・ツール（7 ファイル） | `print(msg, flush=True)` → `logger.info(msg)` に変換（157 件） |
+
+**使い方**:
+
+```bash
+# INFO レベル（デフォルト：既存と同じ見た目）
+agentic-ni demo --dry-run
+
+# DEBUG レベル（タイムスタンプ + ロガー名付きの詳細ログ）
+agentic-ni demo --dry-run --verbose
+
+# WARNING 以上のみ（エラー時以外は無音）
+agentic-ni demo --dry-run --quiet
+```
+
+**API キー未設定時の出力例（改善後）**:
+
+```
+[設定エラー] OpenAI API キーが設定されていません。
+.env に以下を追加してください:
+  LLM_PROVIDER=openai
+  OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
+  OPENAI_MODEL=gpt-4o-mini
+.env ファイルが存在しない場合はテンプレートをコピーして設定してください:
+  cp .env.example .env
+  # .env を開いて必要な値を設定する
+```
+
+**タスク**:
+- [x] `src/agentic_ni/logger.py` を新設（`get_logger()` / `configure_logging()`）
+- [x] 全エージェント・ツールに `logger = get_logger(__name__)` を追加
+- [x] `print(msg, flush=True)` → `logger.info(msg)` に一括変換（157 件）
+- [x] `main()` に `--verbose` / `--quiet` オプションを追加
+- [x] `llm.py` の API キー未設定エラーを分かりやすいメッセージ + `sys.exit(1)` に変更
+- [x] `tests/test_llm.py` に未設定キーの終了テストを追加（6 件 PASS）
+
+**完了基準**: `--verbose` で DEBUG ログが表示され、`--quiet` でエラー以外が抑制されること。✅ 完了
+
+---
+
+#### Q2 — 中断時のラボ自動クリーンアップ
+
+**課題**: Ctrl+C やプロセス激殺で終了した場合、CML 上にゴミラボが残る。
+
+**解決策**: `signal.signal(SIGINT/SIGTERM, ...)` でラボ削除ハンドラーを登録する。正常完了時はラボを保持（ウーザーが全テスト後にラボを検実できるように）。
+
+**実装ポイント**:
+- `_cleanup_lab_ids: list[str]` — このプロセスが新規作成したラボ ID のレジストリ（既存ラボは登録しない）
+- `_register_lab_for_cleanup(lab_id)` — `validator_node` で新規ラボのみ登録（`lab_id` 変化時のみ）
+- `_perform_lab_cleanup()` — `cml_tools.delete_lab()` で全登録ラボを削除（ベストエフォート）
+- `_setup_interrupt_cleanup()` — `main()` 先頭で SIGINT/SIGTERM ハンドラーを登録
+
+**タスク**:
+- [x] `_cleanup_lab_ids` / `_register_lab_for_cleanup()` / `_perform_lab_cleanup()` を `graph.py` に追加
+- [x] `validator_node()` で新規ラボを登録（既存ラボ再利用時は登録しない）
+- [x] `_setup_interrupt_cleanup()` で SIGINT / SIGTERM ハンドラーを登録
+- [x] `main()` 先頭でハンドラーを設定
+- [x] `tests/test_graph.py` に `TestLabCleanup` クラス 9 件追加
+
+**完了基準**: Ctrl+C で中断後に CML 上にゴミラボが残らないこと。✅ 完了（95 件テスト PASS）
+
+---
+
+#### Q3 — チェックポインターによる再開
+
+**課題**: ネットワーク障害や CML タイムアウトでパイプラインが中断した場合、最初からやり直しになる。
+
+**解決策**: LangGraph の `SqliteSaver` チェックポインターを使い、中断した LangGraph ノードから再開できるようにする。
+
+```python
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+checkpointer = SqliteSaver.from_conn_string("checkpoints.db")
+app = build_graph().compile(checkpointer=checkpointer)
+
+# 同じ thread_id で再実行すると中断したノードから再開
+result = app.invoke(state, config={"configurable": {"thread_id": "run-001"}})
+```
+
+**タスク**:
+- [ ] `pyproject.toml` に `langgraph-checkpoint-sqlite` を追加
+- [ ] `compile_graph()` にオプション引数 `checkpoint_db` を追加
+- [ ] `main()` に `--checkpoint-db` / `--thread-id` オプションを追加
+- [ ] 再開シナリオのテストを追加
+
+**完了基準**: 中断後に同じ `thread_id` で再実行すると中断ノードから再開できること。
+
+---
+
+#### Q4 — プロンプトキャッシング
+
+**課題**: `architect_system.md` などのシステムプロンプトは毎回同じ内容を送信しており、トークンコストが無駄になっている。
+
+**解決策**: Anthropic / OpenAI のプロンプトキャッシュ機能を使い、システムプロンプト部分をキャッシュする（最大 90% のコスト削減）。
+
+**タスク**:
+- [ ] Anthropic 向け: `cache_control: {type: ephemeral}` をシステムプロンプトメッセージに付与
+- [ ] OpenAI 向け: Cached Prompt API（`gpt-4o` 以上で自動適用）の確認
+- [ ] キャッシュ効果の計測・ログ出力
+
+**完了基準**: 同じプロンプトセットで 2 回目以降の LLM 呼び出しでキャッシュヒットが確認できること。
+
+---
+
+#### Q5 — Few-shot 例のプロンプト追加
+
+**課題**: 設計エージェントの初回設計で誤りが多い（特に OSPF network 文の漏れ、Loopback の OSPFアドバタイズ忘れなど）。
+
+**解決策**: `rag/` ガイドに加え、`prompts/architect_system.md` に「入力要件 → 正解コンフィグ」の具体例を数件追加する。
+
+**タスク**:
+- [ ] `prompts/architect_system.md` に Few-shot セクションを追加（2〜3 例）
+  - R1-R2 OSPF + Loopback 構成例
+  - iBGP + OSPF 組み合わせ例
+- [ ] Few-shot 追加前後での初回設計成功率を比較検証
+
+**完了基準**: Few-shot 例の追加後、同一要件での初回設計 PASS 率が向上すること。

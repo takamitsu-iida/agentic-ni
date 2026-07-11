@@ -187,3 +187,108 @@ def test_stub_graph_completes_when_tests_pass():
         result = app.invoke(state)
 
     assert "検証成功" in result["final_report"]
+
+
+# ---------------------------------------------------------------------------
+# Q2: 中断時のラボ自動クリーンアップのテスト
+# ---------------------------------------------------------------------------
+
+
+class TestLabCleanup:
+    """_register_lab_for_cleanup / _perform_lab_cleanup / validator_node の統合テスト。"""
+
+    def setup_method(self):
+        """各テスト前にクリーンアップレジストリを初期化する。"""
+        from agentic_ni import graph
+        graph._cleanup_lab_ids.clear()
+
+    def test_register_lab_adds_to_registry(self):
+        """_register_lab_for_cleanup がラボ ID をリストに追加すること。"""
+        from agentic_ni.graph import _register_lab_for_cleanup, _cleanup_lab_ids
+        _register_lab_for_cleanup("lab-001")
+        assert "lab-001" in _cleanup_lab_ids
+
+    def test_register_lab_no_duplicate(self):
+        """同一 lab_id を 2 回登録しても重複しないこと。"""
+        from agentic_ni.graph import _register_lab_for_cleanup, _cleanup_lab_ids
+        _register_lab_for_cleanup("lab-dup")
+        _register_lab_for_cleanup("lab-dup")
+        assert _cleanup_lab_ids.count("lab-dup") == 1
+
+    def test_register_empty_string_ignored(self):
+        """空文字は登録されないこと。"""
+        from agentic_ni.graph import _register_lab_for_cleanup, _cleanup_lab_ids
+        _register_lab_for_cleanup("")
+        assert _cleanup_lab_ids == []
+
+    def test_perform_cleanup_calls_delete(self):
+        """_perform_lab_cleanup が cml_tools.delete_lab を呼び出すこと。"""
+        from agentic_ni.graph import _register_lab_for_cleanup, _perform_lab_cleanup
+        _register_lab_for_cleanup("lab-to-delete")
+
+        with patch("agentic_ni.tools.cml_tools.delete_lab") as mock_delete:
+            _perform_lab_cleanup()
+
+        mock_delete.assert_called_once_with("lab-to-delete")
+
+    def test_perform_cleanup_removes_from_registry(self):
+        """クリーンアップ後にレジストリが空になること。"""
+        from agentic_ni.graph import _register_lab_for_cleanup, _perform_lab_cleanup, _cleanup_lab_ids
+        _register_lab_for_cleanup("lab-cleanup")
+
+        with patch("agentic_ni.tools.cml_tools.delete_lab"):
+            _perform_lab_cleanup()
+
+        assert _cleanup_lab_ids == []
+
+    def test_perform_cleanup_noop_when_empty(self):
+        """レジストリが空の場合は何もしないこと。"""
+        from agentic_ni.graph import _perform_lab_cleanup
+        # delete_lab が呼ばれないことを確認
+        with patch("agentic_ni.tools.cml_tools.delete_lab") as mock_delete:
+            _perform_lab_cleanup()
+        mock_delete.assert_not_called()
+
+    def test_perform_cleanup_tolerates_delete_failure(self):
+        """delete_lab が例外を投げてもプロセスが継続すること。"""
+        from agentic_ni.graph import _register_lab_for_cleanup, _perform_lab_cleanup
+        _register_lab_for_cleanup("lab-fail")
+
+        with patch("agentic_ni.tools.cml_tools.delete_lab", side_effect=RuntimeError("CML接続失敗")):
+            # 例外が外に出ないこと
+            _perform_lab_cleanup()
+
+    def test_validator_node_registers_new_lab(self):
+        """validator_node が新規ラボを登録すること（lab_id が変化した場合）。"""
+        from agentic_ni.graph import validator_node, _cleanup_lab_ids
+
+        mock_result = {
+            "lab_id": "lab-new",
+            "test_results": [],
+            "error_log": "",
+            "retry_count": 1,
+        }
+        with patch("agentic_ni.agents.validator.run", return_value=mock_result):
+            # 初回デプロイ: state の lab_id が空 → 新規ラボが登録される
+            state = _base_state(lab_id="")
+            validator_node(state)
+
+        assert "lab-new" in _cleanup_lab_ids
+
+    def test_validator_node_skips_existing_lab(self):
+        """validator_node が既存ラボ（troubleshoot/analyze 用）を登録しないこと。"""
+        from agentic_ni.graph import validator_node, _cleanup_lab_ids
+
+        existing_id = "lab-existing"
+        mock_result = {
+            "lab_id": existing_id,
+            "test_results": [],
+            "error_log": "",
+            "retry_count": 1,
+        }
+        with patch("agentic_ni.agents.validator.run", return_value=mock_result):
+            # lab_id が変わらない場合（既存ラボ再利用）は登録しない
+            state = _base_state(lab_id=existing_id)
+            validator_node(state)
+
+        assert _cleanup_lab_ids == []
