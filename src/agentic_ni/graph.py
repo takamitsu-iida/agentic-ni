@@ -1073,6 +1073,112 @@ def compile_graph_dry_run():
     return graph.compile()
 
 
+# ---------------------------------------------------------------------------
+# Phase E: 設計分析・改善モード
+# ---------------------------------------------------------------------------
+
+
+def analyze_collect_node(state: AgentState) -> dict:
+    """Phase E: 既存ラボの全機器から running-config と show コマンド出力を収集する。"""
+    lab_id = state.get("lab_id", "") or state.get("troubleshoot_lab_id", "")
+    logger.info(f"\n[設計分析] ラボ {lab_id} を分析中...")
+    return troubleshooter.run_collect(state)
+
+
+def analyze_node(state: AgentState) -> dict:
+    """Phase E: 収集した状態を LLM で分析し、設計評価レポートを生成する。"""
+    logger.info("  >>> 設計品質を分析中...")
+    return analyzer.run_analyze(state)
+
+
+def analyze_report_node(state: AgentState) -> dict:
+    """Phase E: 設計分析レポートを final_report に格納する。"""
+    logger.info("  >>> 設計分析レポートを生成しています...")
+    analysis_result = state.get("analysis_result", "(分析結果なし)")
+    report = (
+        f"# 設計分析レポート\n\n"
+        f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"**ラボ ID**: {state.get('lab_id', '(不明)')}\n\n"
+        f"{analysis_result}"
+    )
+    return {"final_report": report}
+
+
+def improve_collect_node(state: AgentState) -> dict:
+    """Phase E: 改善対象ラボの機器状態を収集する。"""
+    lab_id = state.get("lab_id", "") or state.get("troubleshoot_lab_id", "")
+    logger.info(f"\n[設計改善] ラボ {lab_id} から現状コンフィグを収集中...")
+    return troubleshooter.run_collect(state)
+
+
+def improve_node(state: AgentState) -> dict:
+    """Phase E: 改善要求に基づいて改善後のコンフィグを生成する。"""
+    logger.info("  >>> 改善コンフィグを生成中...")
+    return analyzer.run_improve(state)
+
+
+def improve_save_node(state: AgentState) -> dict:
+    """Phase E: 改善後のコンフィグをファイルに保存してレポートを生成する。"""
+    logger.info("  >>> 改善コンフィグを保存しています...")
+    prompt_set = state.get("prompt_set", "demo")
+    out_dir = Path("configs") / prompt_set
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    device_configs = state.get("device_configs", {})
+    saved: list[str] = []
+    for device, cfg in device_configs.items():
+        cfg_path = out_dir / f"{device}.cfg"
+        cfg_path.write_text(cfg, encoding="utf-8")
+        saved.append(str(cfg_path))
+        logger.info(f"  保存: {cfg_path}")
+
+    analysis_result = state.get("analysis_result", "(改善計画なし)")
+    files_list = "\n".join(f"- `{f}`" for f in saved) or "(保存ファイルなし)"
+
+    report = (
+        f"# 設計改善レポート\n\n"
+        f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"**ラボ ID**: {state.get('lab_id', '(不明)')}\n\n"
+        f"{analysis_result}\n\n"
+        f"### 保存先ファイル\n\n{files_list}\n\n"
+        f"> **注意**: コンフィグはファイルに保存されましたが、CML ラボには適用していません。\n"
+        f"> 適用するには `agentic-ni {prompt_set}` を実行してください。"
+    )
+    return {"final_report": report}
+
+
+def compile_graph_analyze() -> Any:
+    """設計分析モード（--analyze）のコンパイル済みグラフを返す。
+
+    フロー: analyze_collect → analyze → analyze_report → END
+    """
+    graph = StateGraph(AgentState)
+    graph.add_node("collect", analyze_collect_node)
+    graph.add_node("analyze", analyze_node)
+    graph.add_node("report", analyze_report_node)
+    graph.set_entry_point("collect")
+    graph.add_edge("collect", "analyze")
+    graph.add_edge("analyze", "report")
+    graph.add_edge("report", END)
+    return graph.compile()
+
+
+def compile_graph_improve() -> Any:
+    """設計改善モード（--improve）のコンパイル済みグラフを返す。
+
+    フロー: improve_collect → improve → improve_save → END
+    """
+    graph = StateGraph(AgentState)
+    graph.add_node("collect", improve_collect_node)
+    graph.add_node("improve", improve_node)
+    graph.add_node("save", improve_save_node)
+    graph.set_entry_point("collect")
+    graph.add_edge("collect", "improve")
+    graph.add_edge("improve", "save")
+    graph.add_edge("save", END)
+    return graph.compile()
+
+
 def compile_graph_interactive():
     """Human-in-the-Loop ありのコンパイル済みグラフを返す。
 
@@ -1286,6 +1392,32 @@ def _get_live_tools(state: AgentState = None):
     from agentic_ni.tools import pyats_tools
     return pyats_tools
 
+
+
+def _resolve_lab_id(name_or_id: str) -> str | None:
+    """ラボ名またはラボ ID からラボ ID を解決する。
+
+    UUID 形式（``xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx``）の場合はそのまま返す。
+    それ以外の場合はラボタイトルとして CML を検索してヒットした最初の ID を返す。
+
+    Args:
+        name_or_id: CML ラボの ID（UUID 文字列）またはタイトル文字列。
+
+    Returns:
+        str | None: ラボ ID。UUID そのものか、タイトル検索で見つかった ID。
+                    見つからない場合は None。
+    """
+    import re as _re
+    _UUID_RE = _re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        _re.IGNORECASE,
+    )
+    if _UUID_RE.match(name_or_id):
+        return name_or_id  # 既に UUID 形式 → そのまま返す
+
+    # UUID でない → ラボタイトルとして CML を検索
+    from agentic_ni.tools import cml_tools as _cml
+    return _cml.find_lab_by_title(name_or_id)
 
 
 def _resolve_inventory_path(state: AgentState) -> str:
@@ -2346,10 +2478,10 @@ def main() -> None:
             "  --dry-run              CMLデプロイをスキップして設計・コンフィグ生成のみ行う\n"
             "  --use-topology         configs/<set>/topology.yaml をトポロジーとして使用し、コンフィグのみ生成する\n"
             "  --fault-sim            構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する\n"
-            "  --troubleshoot [ID]    既存ラボをトラブルシュート（ID 省略時はラボ名で自動検索）\n"
+            "  --troubleshoot [名前|ID] 既存ラボをトラブルシュート（省略時はラボ名で自動検索）\n"
             "  --issue '<説明>'       --troubleshoot と併用する問題の説明（任意）\n"
-            "  --analyze [ID]         既存ラボの設計を分析してレポートを出力する（変更なし）\n"
-            "  --improve [ID]         既存ラボのコンフィグを改善して configs/<set>/ に保存する\n"
+            "  --analyze [名前|ID]    既存ラボの設計を分析してレポートを出力する（変更なし）\n"
+            "  --improve [名前|ID]    既存ラボのコンフィグを改善して configs/<set>/ に保存する\n"
             "  --request '<改善要求>' --improve と併用する改善要求テキスト（任意）\n"
             "  --apply-to-live        CML 検証成功後に実機へコンフィグ投入する（要インベントリ）\n"
             "  --inventory <path>     --apply-to-live で使うインベントリ YAML のパスを明示指定する\n"
@@ -2369,7 +2501,9 @@ def main() -> None:
             "  agentic-ni demo2 --fault-sim                 # 障害シミュレーションありで実行\n"
             "  agentic-ni demo2 --troubleshoot              # demo2 ラボを自動検索しトラブルシュート\n"
             "  agentic-ni demo2 --troubleshoot abc-1234     # lab_id を明示してトラブルシュート\n"
+            "  agentic-ni demo2 --troubleshoot 'agentic-ni-demo2'  # ラボ名を指定してトラブルシュート\n"
             "  agentic-ni demo --analyze                    # demo ラボの設計を分析する\n"
+            "  agentic-ni demo --analyze 'agentic-ni-demo'  # ラボ名を指定して分析する\n"
             "  agentic-ni demo --analyze abc-1234           # 指定 lab_id の設計を分析する\n"
             "  agentic-ni demo --improve --request 'OSPFにBFDを追加したい'\n"
             "  agentic-ni demo --apply-to-live              # CML検証後に実機投入\n"
@@ -2522,13 +2656,22 @@ def main() -> None:
 
         # 分析モード
         if analyze_mode:
-            if not analyze_lab_id:
+            if analyze_lab_id:
+                # 名前または UUID が渡された場合は解決する
+                resolved = _resolve_lab_id(analyze_lab_id)
+                if resolved is None:
+                    print(f"エラー: ラボ '{analyze_lab_id}' が見つかりません。", file=sys.stderr)
+                    sys.exit(1)
+                if resolved != analyze_lab_id:
+                    print(f"ラボを検出: '{analyze_lab_id}' → ID={resolved}")
+                analyze_lab_id = resolved
+            else:
                 lab_title = f"agentic-ni-{prompt_set}"
                 from agentic_ni.tools import cml_tools as _cml
                 found = _cml.find_lab_by_title(lab_title)
                 if found is None:
                     print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
-                    print(f"  先に通常モードで実行してラボを作成するか、--analyze に lab_id を明示してください。", file=sys.stderr)
+                    print(f"  先に通常モードで実行してラボを作成するか、--analyze にラボ名や ID を指定してください。", file=sys.stderr)
                     sys.exit(1)
                 analyze_lab_id = found
                 print(f"ラボを自動検出: {lab_title} (ID={analyze_lab_id})")
@@ -2539,13 +2682,21 @@ def main() -> None:
 
         # 改善モード
         if improve_mode:
-            if not improve_lab_id:
+            if improve_lab_id:
+                resolved = _resolve_lab_id(improve_lab_id)
+                if resolved is None:
+                    print(f"エラー: ラボ '{improve_lab_id}' が見つかりません。", file=sys.stderr)
+                    sys.exit(1)
+                if resolved != improve_lab_id:
+                    print(f"ラボを検出: '{improve_lab_id}' → ID={resolved}")
+                improve_lab_id = resolved
+            else:
                 lab_title = f"agentic-ni-{prompt_set}"
                 from agentic_ni.tools import cml_tools as _cml
                 found = _cml.find_lab_by_title(lab_title)
                 if found is None:
                     print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
-                    print(f"  先に通常モードで実行してラボを作成するか、--improve に lab_id を明示してください。", file=sys.stderr)
+                    print(f"  先に通常モードで実行してラボを作成するか、--improve にラボ名や ID を指定してください。", file=sys.stderr)
                     sys.exit(1)
                 improve_lab_id = found
                 print(f"ラボを自動検出: {lab_title} (ID={improve_lab_id})")
@@ -2556,20 +2707,21 @@ def main() -> None:
 
         # トラブルシューティングモード
         if troubleshoot_mode:
-            if not troubleshoot_lab_id:
-                # lab_id 省略時はラボタイトル "agentic-ni-{prompt_set}" で自動検索
+            if troubleshoot_lab_id:
+                resolved = _resolve_lab_id(troubleshoot_lab_id)
+                if resolved is None:
+                    print(f"エラー: ラボ '{troubleshoot_lab_id}' が見つかりません。", file=sys.stderr)
+                    sys.exit(1)
+                if resolved != troubleshoot_lab_id:
+                    print(f"ラボを検出: '{troubleshoot_lab_id}' → ID={resolved}")
+                troubleshoot_lab_id = resolved
+            else:
                 lab_title = f"agentic-ni-{prompt_set}"
                 from agentic_ni.tools import cml_tools as _cml
                 found = _cml.find_lab_by_title(lab_title)
                 if found is None:
-                    logger.info(
-                        f"エラー: ラボ '{lab_title}' が見つかりません。",
-                        file=sys.stderr,
-                    )
-                    logger.info(
-                        f"  先に通常モードで実行してラボを作成するか、--troubleshoot に lab_id を明示してください。",
-                        file=sys.stderr,
-                    )
+                    print(f"エラー: ラボ '{lab_title}' が見つかりません。", file=sys.stderr)
+                    print(f"  先に通常モードで実行してラボを作成するか、--troubleshoot にラボ名や ID を指定してください。", file=sys.stderr)
                     print(f"    利用例: agentic-ni {prompt_set}", file=sys.stderr)
                     sys.exit(1)
                 troubleshoot_lab_id = found
