@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from agentic_ni.agents.prompts import load_agent_prompt
+from agentic_ni.agents.prompts import load_agent_prompt, make_system_message
 from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState, FaultScenarioResult, TestResult
@@ -110,7 +110,7 @@ def _build_fault_plan_messages(
         "各シナリオで使用する link_id はリンク一覧の id フィールドの値を使用してください。"
     )
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 

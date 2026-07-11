@@ -22,7 +22,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from agentic_ni.agents.prompts import load_agent_prompt
+from agentic_ni.agents.prompts import load_agent_prompt, make_system_message
 from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState, TroubleshootFixRecord
@@ -179,7 +179,7 @@ def _build_diagnosis_messages(
     except Exception:  # noqa: BLE001
         pass
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 
@@ -206,7 +206,7 @@ def _build_fix_plan_messages(
         "- rollback_commands には no コマンドで元に戻す方法を記述すること"
     )
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 

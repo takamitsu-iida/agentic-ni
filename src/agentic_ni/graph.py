@@ -112,6 +112,90 @@ def _setup_interrupt_cleanup() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Q3: チェックポインターによる再開
+# ---------------------------------------------------------------------------
+
+
+def _checkpoint_db_path() -> str:
+    """チェックポイント DB のパスを返す（~/.agentic_ni/checkpoints.db）。"""
+    db_dir = Path.home() / ".agentic_ni"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    return str(db_dir / "checkpoints.db")
+
+
+def _thread_id(prompt_set: str) -> str:
+    """プロンプトセットに対応するチェックポイントスレッド ID を返す。"""
+    return f"agentic-ni--{prompt_set}"
+
+
+def _delete_checkpoint(db_path: str, thread_id: str) -> None:
+    """指定スレッドのチェックポイントデータを SQLite から削除する。"""
+    import sqlite3
+    with sqlite3.connect(db_path) as conn:
+        tables = [
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        ]
+        for table in tables:
+            try:
+                conn.execute(f'DELETE FROM "{table}" WHERE thread_id = ?', (thread_id,))
+            except Exception:  # noqa: BLE001
+                pass
+        conn.commit()
+
+
+def _ask_resume_or_clear(checkpointer: Any, thread_id: str, prompt_set: str) -> str:
+    """中断済みパイプラインを検出してユーザーに確認する。
+
+    Returns:
+        "resume"  中断から再開する
+        "clear"   チェックポイントをクリアして最初から実行する
+        "fresh"   チェックポイントなし（初回実行）
+        "cancel"  取り消し（何もしない）
+    """
+    config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+    try:
+        snapshot = checkpointer.get(config)
+    except Exception:  # noqa: BLE001
+        return "fresh"
+
+    if snapshot is None:
+        return "fresh"
+
+    # 前回の状態サマリーを表示
+    values = getattr(snapshot, "values", {}) or {}
+    retry = values.get("retry_count", 0)
+    lab_id = values.get("lab_id", "")
+    next_nodes = list(getattr(snapshot, "next", None) or [])
+
+    print()
+    print("  ⚠️  中断したパイプラインが見つかりました")
+    print(f"     プロンプトセット : {prompt_set}")
+    if retry:
+        print(f"     試行回数       : {retry} 回目まで完了")
+    if lab_id:
+        print(f"     CML ラボ ID    : {lab_id}")
+    if next_nodes:
+        print(f"     次のノード     : {', '.join(next_nodes)}")
+    print()
+
+    try:
+        answer = input(
+            "  [r] 継続する   [c] クリアして最初から   [Enter/n] キャンセル: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return "cancel"
+
+    if answer in ("r", "resume", "継続"):
+        return "resume"
+    if answer in ("c", "clear", "クリア"):
+        return "clear"
+    return "cancel"
+
+
+# ---------------------------------------------------------------------------
 # ノード定義
 # ---------------------------------------------------------------------------
 
@@ -2525,7 +2609,42 @@ def main() -> None:
             except Exception:  # noqa: BLE001
                 pass  # CML 未接続時は無視して通常フローへ
 
-        result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id, use_provided_topology))
+        # Q3: チェックポインターによる再開（dry-run は対象外）
+        if dry_run:
+            result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id, use_provided_topology))
+        else:
+            try:
+                from langgraph.checkpoint.sqlite import SqliteSaver
+                db_path = _checkpoint_db_path()
+                tid = _thread_id(prompt_set)
+
+                with SqliteSaver.from_conn_string(db_path) as checkpointer:
+                    action = _ask_resume_or_clear(checkpointer, tid, prompt_set)
+
+                    if action == "cancel":
+                        return
+
+                    if action == "clear":
+                        _delete_checkpoint(db_path, tid)
+                        logger.info("  チェックポイントをクリアしました。最初から実行します。\n")
+
+                    run_config: dict[str, Any] = {"configurable": {"thread_id": tid}}
+                    app_cp = build_graph().compile(checkpointer=checkpointer)
+
+                    if action == "resume":
+                        logger.info("  中断したパイプラインを再開します...\n")
+                        result = app_cp.invoke(None, config=run_config)
+                    else:  # "fresh" or "clear"
+                        result = app_cp.invoke(
+                            initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id, use_provided_topology),
+                            config=run_config,
+                        )
+
+            except ImportError:
+                # langgraph-checkpoint-sqlite 未インストール時はチェックポイントなしで実行
+                logger.debug("langgraph-checkpoint-sqlite が未インストールです。チェックポイントなしで実行します。")
+                result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id, use_provided_topology))
+
         print(result.get("final_report", "(レポートなし)"))
 
         # Phase I: 実機適用モード（--apply-to-live 指定時）

@@ -37,7 +37,13 @@ all = [
     "genie>=24.0",
     "chromadb>=0.5",
     "pysqlite3-binary>=0.5",
+    "langgraph-checkpoint-sqlite>=2.0",
 ]
+
+[project.optional-dependencies.checkpoint]
+# チェックポインター（設計ループの再開機能）
+# uv sync --extra checkpoint で有効化
+dependencies = ["langgraph-checkpoint-sqlite>=2.0"]
 
 [project.scripts]
 agentic-ni = "agentic_ni.graph:main"

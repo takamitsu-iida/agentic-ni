@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from agentic_ni.agents.prompts import PROMPTS_DIR as _PROMPTS_DIR, load_agent_prompt, list_prompt_sets
+from agentic_ni.agents.prompts import PROMPTS_DIR as _PROMPTS_DIR, load_agent_prompt, list_prompt_sets, make_system_message
 from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState, load_device_configs, write_device_configs
@@ -225,7 +225,7 @@ def _build_messages(state: AgentState) -> list[dict[str, str]]:
             )
 
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 
@@ -317,7 +317,7 @@ def _build_messages_config_only(state: AgentState) -> list[dict[str, str]]:
             )
 
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 

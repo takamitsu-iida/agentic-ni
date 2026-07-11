@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from agentic_ni.agents.prompts import load_agent_prompt
+from agentic_ni.agents.prompts import load_agent_prompt, make_system_message
 from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState
@@ -153,7 +153,7 @@ def _build_analysis_messages(
         pass
 
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 
@@ -191,7 +191,7 @@ def _build_improvement_messages(
         pass
 
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 

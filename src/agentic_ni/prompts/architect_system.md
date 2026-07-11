@@ -94,3 +94,134 @@ end
 - ルーターIDは Lo0 のアドレスを使用するか、意味のある値（例: 1.1.1.1）にする
 - OSPFエリアは要件に明示がなければ area 0 を使用する
 - VLANを使う場合はスイッチのVLAN DBとトランクポートの設定も含める
+
+---
+
+## 設計例（Few-shot）
+
+過去の検証成功事例から抽出したパターンです。よくあるミスと正しい設計を照らし合わせ、初回から正確なコンフィグを生成してください。
+
+---
+
+### 例1: R1–R2 OSPF + Loopback 構成
+
+**要件**: R1とR2をOSPF エリア0で接続する。各ルーターにLoopbackを設定し（R1: 1.1.1.1/32、R2: 2.2.2.2/32）、LoopbackアドレスをOSPFでアドバタイズする。R1から 2.2.2.2 へpingが通ること。
+
+**R1 の正しいコンフィグ**:
+
+```
+hostname R1
+!
+interface Loopback0
+ ip address 1.1.1.1 255.255.255.255
+ no shutdown
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.1 255.255.255.252
+ ip ospf network point-to-point
+ no shutdown
+!
+router ospf 1
+ router-id 1.1.1.1
+ network 10.0.12.0 0.0.0.3 area 0
+ network 1.1.1.1 0.0.0.0 area 0
+!
+end
+```
+
+**R2 の正しいコンフィグ**:
+
+```
+hostname R2
+!
+interface Loopback0
+ ip address 2.2.2.2 255.255.255.255
+ no shutdown
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.2 255.255.255.252
+ ip ospf network point-to-point
+ no shutdown
+!
+router ospf 1
+ router-id 2.2.2.2
+ network 10.0.12.0 0.0.0.3 area 0
+ network 2.2.2.2 0.0.0.0 area 0
+!
+end
+```
+
+**この例で必須な設定（省略するとテストが FAIL する）**:
+
+| 設定 | 省略した場合の症状 |
+|---|---|
+| `ip ospf network point-to-point` | DR/BDR選出が発生しネイバー確立が遅延・失敗することがある |
+| `router-id 1.1.1.1` | OSPFが予期せぬIDを自動選択する |
+| `network 10.0.12.0 0.0.0.3 area 0` | OSPFネイバーが確立しない |
+| `network 1.1.1.1 0.0.0.0 area 0` | **Loopbackへのpingが通らない**（最も多いミス） |
+
+---
+
+### 例2: OSPF + iBGP 構成（Loopback経由iBGP）
+
+**要件**: R1とR2をOSPFエリア0で接続。AS 65000内でiBGPを設定する。BGPピアにはLoopbackアドレスを使用する（R1: 1.1.1.1 ↔ R2: 2.2.2.2）。
+
+**R1 の正しいコンフィグ**（OSPF部分は例1と同じ。BGP部分のみ示す）:
+
+```
+router bgp 65000
+ bgp router-id 1.1.1.1
+ neighbor 2.2.2.2 remote-as 65000
+ neighbor 2.2.2.2 update-source Loopback0
+ !
+ address-family ipv4 unicast
+  neighbor 2.2.2.2 activate
+ exit-address-family
+!
+```
+
+**R2 の正しいコンフィグ**（BGP部分）:
+
+```
+router bgp 65000
+ bgp router-id 2.2.2.2
+ neighbor 1.1.1.1 remote-as 65000
+ neighbor 1.1.1.1 update-source Loopback0
+ !
+ address-family ipv4 unicast
+  neighbor 1.1.1.1 activate
+ exit-address-family
+!
+```
+
+**この例で必須な設定（省略するとテストが FAIL する）**:
+
+| 設定 | 省略した場合の症状 |
+|---|---|
+| `update-source Loopback0` | **BGPセッションが確立しない**（最も多いミス）。物理IPでTCP接続しようとし、LoopbackへのBGP接続が失敗する |
+| OSPFでLoopbackをアドバタイズ | ネイバーアドレス（2.2.2.2）に到達できずセッションが上がらない |
+| `address-family ipv4 unicast` ブロック | 古いIOS形式ではピアがアクティブにならないことがある |
+
+---
+
+### 例3: eBGP 構成（異なるAS間の接続）
+
+**要件**: R1（AS 65001）とR2（AS 65002）をeBGPで接続する。
+
+**R1 の正しいコンフィグ**:
+
+```
+router bgp 65001
+ bgp router-id 1.1.1.1
+ neighbor 10.0.12.2 remote-as 65002
+ !
+ address-family ipv4 unicast
+  neighbor 10.0.12.2 activate
+ exit-address-family
+!
+```
+
+**eBGP の注意事項**:
+- iBGPと異なり `update-source Loopback0` は原則不要（物理IPでピアリングする）
+- `neighbor <物理IP> remote-as <相手のAS>` で設定する
+- iBGP（同一AS）との判別: `remote-as` が自分の AS と同じなら iBGP、違うなら eBGP

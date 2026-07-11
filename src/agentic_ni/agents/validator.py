@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from agentic_ni.agents.prompts import load_agent_prompt, list_prompt_sets
+from agentic_ni.agents.prompts import load_agent_prompt, list_prompt_sets, make_system_message
 from agentic_ni.logger import get_logger
 from agentic_ni.llm import get_llm
 from agentic_ni.state import AgentState, TestResult, load_device_configs
@@ -112,7 +112,7 @@ def _build_test_plan_messages(state: AgentState) -> list[dict[str, str]]:
         "要件を検証するために必要なテスト項目を列挙してください。"
     )
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 
@@ -139,7 +139,7 @@ def _build_analysis_messages(
         "どの設定が原因で、どのように修正すべきかを具体的に記述してください。"
     )
     return [
-        {"role": "system", "content": system_prompt},
+        make_system_message(system_prompt),
         {"role": "user", "content": user_content},
     ]
 
