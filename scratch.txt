@@ -1,0 +1,19 @@
+
+```
+(agentic-ni) iida@s400win:~/git/agentic-ni$ agentic-ni demo --analyze
+プロンプトセット: demo
+分析モード: ラボID=(自動検索)
+
+処理を開始します...
+
+ラボを自動検出: agentic-ni-demo (ID=30dddea7-09c1-4190-ab28-12427fd5c3e9)
+Traceback (most recent call last):
+  File "/home/iida/git/agentic-ni/.venv/bin/agentic-ni", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/iida/git/agentic-ni/src/agentic_ni/graph.py", line 2535, in main
+    app = compile_graph_analyze()
+          ^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compile_graph_analyze' is not defined. Did you mean: 'compile_graph_dry_run'?
+(agentic-ni) iida@s400win:~/git/agentic-ni$
+```
