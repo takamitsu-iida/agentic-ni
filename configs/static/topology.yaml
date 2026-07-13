@@ -1,6 +1,6 @@
 lab:
   title: agentic-ni-static
-  description: "Simple network with two routers and hosts behind them"
+  description: "A simple lab connecting R1 and R2 with static routing and host connectivity"
   notes: ""
   timestamp: 0
   version: "0.1.0"
@@ -39,8 +39,8 @@ nodes:
   - id: "n2"
     label: "Host1"
     node_definition: "iol-xe"
-    x: -400
-    y: 0
+    x: -200
+    y: 200
     configuration: ""
     interfaces:
       - id: "i0"
@@ -50,8 +50,8 @@ nodes:
   - id: "n3"
     label: "Host2"
     node_definition: "iol-xe"
-    x: 400
-    y: 0
+    x: 200
+    y: 200
     configuration: ""
     interfaces:
       - id: "i0"
