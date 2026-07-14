@@ -157,6 +157,14 @@ class AgentState(TypedDict):
     analysis_result: str
     """--analyze または --improve で生成された分析・改善計画のテキスト（Markdown）。"""
 
+    improve_apply: bool
+    """True の場合、--improve で生成した改善コンフィグを既存 CML ラボへ
+    （ラボを再構築せず）増分適用する（--apply）。"""
+
+    improve_apply_commands: dict[str, str]
+    """デバイス名 → configure terminal に流す増分コマンド列のマッピング。
+    --improve が生成し、--apply 時に既存ラボへ適用するために使用する。"""
+
     # --- Phase I: 実機適用モード ---
     live_inventory_path: str
     """--apply-to-live で使用するインベントリ YAML のパス。

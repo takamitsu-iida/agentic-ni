@@ -90,6 +90,18 @@ class ImprovementOutput(BaseModel):
     changes_summary: list[str] = Field(
         description="加えた変更の一覧（箇条書き形式の短い文）。"
     )
+    apply_commands: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "既存ラボへ再構築せず増分適用するためのコマンド。"
+            "キーはデバイス名（device_configs と一致させること）、"
+            "値は `configure terminal` モードにそのまま流せる IOS コマンド列（複数行可）。"
+            "現在のコンフィグから改善後のコンフィグへ変化させる差分のみを含めること。"
+            "インターフェース配下の設定など階層コマンドは、必ず親コンテキスト"
+            "（例: `interface GigabitEthernet0/0`）から記述すること。"
+            "変更が不要なデバイスはキーを含めないこと。"
+        ),
+    )
     rationale: str = Field(
         description="この改善計画の根拠と期待される効果を説明する（2〜4 文）。"
     )
@@ -173,7 +185,10 @@ def _build_improvement_messages(
         "以下の制約に従って改善後のコンフィグを生成してください:\n"
         "- 改善要求を満たす最小限の変更にとどめる\n"
         "- すべてのデバイスの complete なコンフィグを出力する（変更のないデバイスも含む）\n"
-        "- device_configs のキーは現在のノードラベルと完全に一致させること"
+        "- device_configs のキーは現在のノードラベルと完全に一致させること\n"
+        "- apply_commands には、稼働中のラボへ再構築せず増分適用するための\n"
+        "  `configure terminal` 用コマンドを、変更したデバイスごとに出力すること\n"
+        "  （階層コマンドは親コンテキストから記述し、現状からの差分のみ含める）"
     )
 
     # 知識ベースコンテキスト付与
@@ -275,5 +290,6 @@ def run_improve(state: AgentState) -> dict[str, Any]:
     )
     return {
         "device_configs": result.device_configs,
+        "improve_apply_commands": result.apply_commands,
         "analysis_result": improvement_summary,
     }

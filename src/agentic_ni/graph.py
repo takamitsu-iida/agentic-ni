@@ -1140,11 +1140,64 @@ def improve_save_node(state: AgentState) -> dict:
         f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         f"**ラボ ID**: {state.get('lab_id', '(不明)')}\n\n"
         f"{analysis_result}\n\n"
-        f"### 保存先ファイル\n\n{files_list}\n\n"
-        f"> **注意**: コンフィグはファイルに保存されましたが、CML ラボには適用していません。\n"
-        f"> 適用するには `agentic-ni {prompt_set}` を実行してください。"
+        f"### 保存先ファイル\n\n{files_list}"
     )
+
+    if not state.get("improve_apply"):
+        report += (
+            "\n\n"
+            "> **注意**: コンフィグはファイルに保存されましたが、CML ラボには適用していません。\n"
+            f"> 稼働中のラボを再構築せずに適用するには、`--apply` を付けて再実行してください:\n"
+            f"> `agentic-ni {prompt_set} --improve --apply`"
+        )
     return {"final_report": report}
+
+
+def improve_apply_node(state: AgentState) -> dict:
+    """Phase E: 改善後のコンフィグを既存 CML ラボへ増分適用する（--apply）。
+
+    ラボを再構築せず、`configure terminal` モードで差分コマンドのみを流し込む。
+    """
+    from agentic_ni.tools import pyats_tools
+
+    logger.info("  >>> 改善コンフィグを CML ラボへ増分適用しています...")
+    lab_id = state.get("lab_id", "") or state.get("troubleshoot_lab_id", "")
+    apply_commands = state.get("improve_apply_commands", {})
+    device_configs = state.get("device_configs", {})
+    base_report = state.get("final_report", "")
+
+    # 空コマンドのデバイスは除外
+    targets = {d: c for d, c in apply_commands.items() if c and c.strip()}
+    if not targets:
+        logger.info("  適用対象の差分コマンドがありません。スキップします。")
+        note = (
+            "\n\n### CML ラボへの適用\n\n"
+            "> 適用対象の差分コマンドがありませんでした（変更なし）。"
+        )
+        return {"final_report": base_report + note}
+
+    testbed_yaml = pyats_tools.build_testbed(lab_id, device_configs)
+
+    result_rows: list[str] = []
+    for device, commands in targets.items():
+        logger.info(f"    適用中 [{device}] ...")
+        try:
+            pyats_tools.apply_incremental_config(testbed_yaml, device, commands)
+            logger.info(f"    ✅ 適用成功: {device}")
+            result_rows.append(f"| {device} | ✅ 成功 | - |")
+        except Exception as exc:  # noqa: BLE001
+            msg = f"{type(exc).__name__}: {exc}"
+            logger.info(f"    ❌ 適用失敗: {device} — {msg}")
+            result_rows.append(f"| {device} | ❌ 失敗 | {msg} |")
+
+    section = (
+        "\n\n### CML ラボへの適用\n\n"
+        f"ラボ `{lab_id}` へ増分適用しました（再構築なし）。\n\n"
+        "| デバイス | 結果 | エラー |\n"
+        "|---|---|---|\n"
+        + "\n".join(result_rows)
+    )
+    return {"final_report": base_report + section}
 
 
 def compile_graph_analyze() -> Any:
@@ -1163,10 +1216,11 @@ def compile_graph_analyze() -> Any:
     return graph.compile()
 
 
-def compile_graph_improve() -> Any:
+def compile_graph_improve(apply_mode: bool = False) -> Any:
     """設計改善モード（--improve）のコンパイル済みグラフを返す。
 
     フロー: improve_collect → improve → improve_save → END
+    apply_mode=True の場合は save の後に既存ラボへ増分適用する apply を追加する。
     """
     graph = StateGraph(AgentState)
     graph.add_node("collect", improve_collect_node)
@@ -1175,7 +1229,12 @@ def compile_graph_improve() -> Any:
     graph.set_entry_point("collect")
     graph.add_edge("collect", "improve")
     graph.add_edge("improve", "save")
-    graph.add_edge("save", END)
+    if apply_mode:
+        graph.add_node("apply", improve_apply_node)
+        graph.add_edge("save", "apply")
+        graph.add_edge("apply", END)
+    else:
+        graph.add_edge("save", END)
     return graph.compile()
 
 
@@ -1320,6 +1379,7 @@ def initial_state_improve(
     lab_id: str,
     analyze_request: str = "",
     prompt_set: str = "demo",
+    apply_mode: bool = False,
 ) -> AgentState:
     """改善モードの初期ステートを生成するファクトリー関数。
 
@@ -1327,6 +1387,7 @@ def initial_state_improve(
         lab_id: 改善対象の既存 CML ラボの ID。
         analyze_request: 改善要求の自然言語テキスト。
         prompt_set: 要件コンテキストに使用するプロンプトセット名。
+        apply_mode: True の場合、生成した改善コンフィグを既存ラボへ増分適用する。
     """
     try:
         requirement = load_requirement(prompt_set)
@@ -1358,6 +1419,8 @@ def initial_state_improve(
         troubleshoot_report="",
         analyze_request=analyze_request,
         analysis_result="",
+        improve_apply=apply_mode,
+        improve_apply_commands={},
         # Phase I
         live_inventory_path="",
         live_apply_records=[],
@@ -2483,6 +2546,7 @@ def main() -> None:
             "  --analyze [名前|ID]    既存ラボの設計を分析してレポートを出力する（変更なし）\n"
             "  --improve [名前|ID]    既存ラボのコンフィグを改善して configs/<set>/ に保存する\n"
             "  --request '<改善要求>' --improve と併用する改善要求テキスト（任意）\n"
+            "  --apply                --improve と併用し、生成した改善コンフィグを既存ラボへ増分適用する（再構築なし）\n"
             "  --apply-to-live        CML 検証成功後に実機へコンフィグ投入する（要インベントリ）\n"
             "  --inventory <path>     --apply-to-live で使うインベントリ YAML のパスを明示指定する\n"
             "  --live-verify          --apply-to-live 実行後に pyATS で実機テストを実行する\n"
@@ -2506,6 +2570,7 @@ def main() -> None:
             "  agentic-ni demo --analyze 'agentic-ni-demo'  # ラボ名を指定して分析する\n"
             "  agentic-ni demo --analyze abc-1234           # 指定 lab_id の設計を分析する\n"
             "  agentic-ni demo --improve --request 'OSPFにBFDを追加したい'\n"
+            "  agentic-ni demo --improve --request 'OSPFに認証を追加したい' --apply  # 生成して既存ラボへ適用\n"
             "  agentic-ni demo --apply-to-live              # CML検証後に実機投入\n"
             "  agentic-ni demo --apply-to-live --inventory inventory/prod.yaml --live-verify\n"
             "  agentic-ni --list\n"
@@ -2563,6 +2628,7 @@ def main() -> None:
     troubleshoot_mode: bool = "--troubleshoot" in args
     analyze_mode: bool = "--analyze" in args
     improve_mode: bool = "--improve" in args
+    improve_apply: bool = "--apply" in args
     apply_to_live: bool = "--apply-to-live" in args
     live_verify: bool = "--live-verify" in args
     troubleshoot_lab_id: str | None = None
@@ -2638,6 +2704,8 @@ def main() -> None:
         print(f"改善モード: ラボID={improve_lab_id or '(自動検索)'}")
         if improve_request:
             print(f"改善要求: {improve_request}")
+        if improve_apply:
+            print("適用: 有効（既存ラボへ増分適用・再構築なし）")
     if apply_to_live:
         print(f"実機適用モード: 有効")
         if live_inventory_path:
@@ -2700,8 +2768,12 @@ def main() -> None:
                     sys.exit(1)
                 improve_lab_id = found
                 print(f"ラボを自動検出: {lab_title} (ID={improve_lab_id})")
-            app = compile_graph_improve()
-            result = app.invoke(initial_state_improve(improve_lab_id, improve_request, prompt_set))
+            app = compile_graph_improve(apply_mode=improve_apply)
+            result = app.invoke(
+                initial_state_improve(
+                    improve_lab_id, improve_request, prompt_set, apply_mode=improve_apply
+                )
+            )
             print(result.get("final_report", "(レポートなし)"))
             return
 
