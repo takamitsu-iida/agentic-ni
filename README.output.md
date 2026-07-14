@@ -1426,3 +1426,717 @@ Implementing OSPF authentication increases network security by ensuring that OSP
 > 適用するには `agentic-ni demo` を実行してください。
 iida@s400win:~/git/agentic-ni$
 ```
+
+<br><br><br>
+
+## デモ３
+
+```
+iida@s400win:~/git/agentic-ni$ agentic-ni demo3 --use-topology
+プロンプトセット: demo3
+トポロジー: configs/demo3/topology.yaml を使用（コンフィグのみ生成モード）
+
+【要件】
+  ## ネットワーク要件
+
+  - R1（AS 65001）とR2（AS 65002）をeBGPで接続する
+  - R1-R2間リンク: 10.0.12.0/30（R1: 10.0.12.1、R2: 10.0.12.2）
+
+  ## Loopbackインターフェース
+
+  - R1: Loopback0 = 1.1.1.1/32
+  - R2: Loopback0 = 2.2.2.2/32
+
+  ## eBGPの設定
+
+  - R1のAS番号: 65001、R2のAS番号: 65002
+  - eBGPピアアドレスはGigabitEthernet0/0のIPアドレスを使用すること（R1: 10.0.12.1 ↔ R2: 10.0.12.2）
+  - 各ルータは自身のLoopback0アドレスをBGPでアドバタイズすること
+
+  ## 必須検証項目
+
+  - R1とR2のeBGPセッションが確立していること（Established状態）
+  - R1からR2のLoopback（2.2.2.2）へpingが通ること
+  - R2からR1のLoopback（1.1.1.1）へpingが通ること
+
+処理を開始します...
+
+  [トポロジー] configs/demo3/topology.yaml を読み込みました（コンフィグのみ生成モード）
+
+============================================================
+[第1回 / 上限5回]  設計エージェント  (初回設計)
+============================================================
+  >>> LLM にコンフィグを生成させています（トポロジーは提供済み）...
+  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。
+  [Strategy E] 2 ノードのコンフィグをファイルに保存: configs/demo3/
+  <<< 設計完了
+
+[第1回 / 上限5回]  検証エージェント  開始
+  [1/4] CML にデプロイ中...
+    ラボをインポート中...
+    コンフィグを投入中 (2 ノード)...
+    ラボを起動中...
+    ノードの起動を待機中... (タイムアウト: 300s / 2 ノード)
+    起動完了 (lab_id=e4a25a48-6626-4c8f-b122-c516e02fa8bb)
+  [1/4] デプロイ完了 (lab_id=e4a25a48-6626-4c8f-b122-c516e02fa8bb)
+  [2/4] テスト計画を立案中...
+  [2/4] テスト計画完了 (4 件)
+  [3/4] テストを実行中... (並列 最大 8 workers)
+        [1/4] Verify that eBGP session with R2 is established on R1. → ✅ PASS  1 peer(s) Established
+        [2/4] Verify that eBGP session with R1 is established on R2. → ✅ PASS  1 peer(s) Established
+        [4/4] Verify that R2 can ping R1's Loopback0 (1.1.1.1). → ✅ PASS  ping 1.1.1.1 OK
+        [3/4] Verify that R1 can ping R2's Loopback0 (2.2.2.2). → ✅ PASS  ping 2.2.2.2 OK
+  [4/4] 全テスト PASS
+
+  >>> 全テスト PASS! 最終レポートを生成しています...
+  [Phase D] 設計ドキュメント生成完了: configs/demo3 (6 ファイル)
+# 検証成功レポート
+
+**生成日時**: 2026-07-14 16:35:01
+
+## 要件
+## ネットワーク要件
+
+- R1（AS 65001）とR2（AS 65002）をeBGPで接続する
+- R1-R2間リンク: 10.0.12.0/30（R1: 10.0.12.1、R2: 10.0.12.2）
+
+## Loopbackインターフェース
+
+- R1: Loopback0 = 1.1.1.1/32
+- R2: Loopback0 = 2.2.2.2/32
+
+## eBGPの設定
+
+- R1のAS番号: 65001、R2のAS番号: 65002
+- eBGPピアアドレスはGigabitEthernet0/0のIPアドレスを使用すること（R1: 10.0.12.1 ↔ R2: 10.0.12.2）
+- 各ルータは自身のLoopback0アドレスをBGPでアドバタイズすること
+
+## 必須検証項目
+
+- R1とR2のeBGPセッションが確立していること（Established状態）
+- R1からR2のLoopback（2.2.2.2）へpingが通ること
+- R2からR1のLoopback（1.1.1.1）へpingが通ること
+
+## 概要
+- 試行回数: 1 回
+- PASSテスト: 4 件
+- FAILテスト: 0 件
+- ラボID: e4a25a48-6626-4c8f-b122-c516e02fa8bb
+
+## ネットワーク設計
+
+### トポロジー定義（CML YAML）
+```yaml
+lab:
+  title: agentic-ni-demo3
+  description: "2 Routers interconnected for eBGP demonstration"
+  notes: ""
+  timestamp: 0
+  version: "0.1.0"
+
+nodes:
+  - id: "n0"
+    label: "R1"
+    node_definition: "iosv"
+    x: -200
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+
+  - id: "n1"
+    label: "R2"
+    node_definition: "iosv"
+    x: 200
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+
+links:
+  - id: "l0"
+    n1: "n0"
+    i1: "i0"
+    n2: "n1"
+    i2: "i0"
+    label: "l0"
+```
+
+### 機器コンフィグ
+
+### R1
+```
+hostname R1
+!
+interface Loopback0
+ ip address 1.1.1.1 255.255.255.255
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.1 255.255.255.252
+ no shutdown
+!
+router bgp 65001
+ bgp router-id 1.1.1.1
+ neighbor 10.0.12.2 remote-as 65002
+ !
+ address-family ipv4
+  network 1.1.1.1 mask 255.255.255.255
+  neighbor 10.0.12.2 activate
+ exit-address-family
+!
+end
+```
+
+### R2
+```
+hostname R2
+!
+interface Loopback0
+ ip address 2.2.2.2 255.255.255.255
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.2 255.255.255.252
+ no shutdown
+!
+router bgp 65002
+ bgp router-id 2.2.2.2
+ neighbor 10.0.12.1 remote-as 65001
+ !
+ address-family ipv4
+  network 2.2.2.2 mask 255.255.255.255
+  neighbor 10.0.12.1 activate
+ exit-address-family
+!
+end
+```
+
+## 検証テスト結果
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| Verify that eBGP session with R2 is established on R1. | ✅ PASS | 1 peer(s) Established |
+| Verify that eBGP session with R1 is established on R2. | ✅ PASS | 1 peer(s) Established |
+| Verify that R1 can ping R2's Loopback0 (2.2.2.2). | ✅ PASS | ping 2.2.2.2 OK |
+| Verify that R2 can ping R1's Loopback0 (1.1.1.1). | ✅ PASS | ping 1.1.1.1 OK |
+
+すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。
+
+---
+
+## 設計ドキュメント（Phase D）
+
+### IP アドレス台帳
+
+| デバイス | インターフェース | アドレス（CIDR） |
+|---|---|---|
+| R1 | Loopback0 | 1.1.1.1/32 |
+| R1 | GigabitEthernet0/0 | 10.0.12.1/30 |
+| R2 | Loopback0 | 2.2.2.2/32 |
+| R2 | GigabitEthernet0/0 | 10.0.12.2/30 |
+
+### ルーティング設計サマリー
+
+**BGP**: `R1` (AS 65001, 1 ネイバー), `R2` (AS 65002, 1 ネイバー)
+
+### 保存先ファイル
+
+- `configs/demo3/topology.yaml`
+- `configs/demo3/R1.cfg`
+- `configs/demo3/R2.cfg`
+- `configs/demo3/ip_ledger.md`
+- `configs/demo3/ip_ledger.csv`
+- `configs/demo3/routing_design.md`
+iida@s400win:~/git/agentic-ni$
+```
+
+<br><br><br>
+
+
+## デモ２　障害検証
+
+```
+iida@s400win:~/git/agentic-ni$ agentic-ni demo2 --fault-sim
+プロンプトセット: demo2
+障害シミュレーション: 有効
+
+【要件】
+  ## ネットワーク構成
+
+  - 3台のルーター（R1・R2・R3）をフルメッシュ（三角形）で接続すること
+  - 各リンクで OSPF エリア 0 を構成すること
+  - R1–R2 リンクが断した場合でもR1→R3→R2 の迂回経路でトラフィックが継続するように設計すること
+  - ルータ・ルータ間のOSPFのリンクタイプはpoint-to-pointとして設計すること
+  - OSPFのHello/Deadのタイマー値は3秒/10秒とすること
+
+  ## リンク構成
+
+  | リンク | 接続 | ネットワーク |
+  |---|---|---|
+  | R1–R2 | GE0/0 (R1) ↔ GE0/0 (R2) | 10.0.12.0/30 |
+  | R1–R3 | GE0/1 (R1) ↔ GE0/0 (R3) | 10.0.13.0/30 |
+  | R2–R3 | GE0/1 (R2) ↔ GE0/1 (R3) | 10.0.23.0/30 |
+
+  ## IPアドレス割り当て
+
+  | 機器 | インターフェース | IPアドレス |
+  |---|---|---|
+  | R1 | GigabitEthernet0/0 | 10.0.12.1/30 |
+  | R1 | GigabitEthernet0/1 | 10.0.13.1/30 |
+  | R1 | Loopback0 | 1.1.1.1/32 |
+  | R2 | GigabitEthernet0/0 | 10.0.12.2/30 |
+  | R2 | GigabitEthernet0/1 | 10.0.23.1/30 |
+  | R2 | Loopback0 | 2.2.2.2/32 |
+  | R3 | GigabitEthernet0/0 | 10.0.13.2/30 |
+  | R3 | GigabitEthernet0/1 | 10.0.23.2/30 |
+  | R3 | Loopback0 | 3.3.3.3/32 |
+
+  ## OSPFの設定
+
+  - プロセス番号: 1
+  - エリア: 0 のみ
+  - 全インターフェース（Loopback 含む）を area 0 に参加させること
+  - Router-ID は Loopback0 アドレスを使用すること
+
+  ## 必須検証項目
+
+  - R1・R2・R3 の OSPF ネイバーがそれぞれ 2 つ確立していること
+  - R1 から 2.2.2.2（R2 Loopback）へ ping が通ること
+  - R1 から 3.3.3.3（R3 Loopback）へ ping が通ること
+  - R2 から 3.3.3.3（R3 Loopback）へ ping が通ること
+
+処理を開始します...
+
+
+============================================================
+[第1回 / 上限5回]  設計エージェント  (初回設計)
+============================================================
+  >>> LLM にトポロジーとコンフィグを生成させています...
+  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。
+  [Strategy E] 3 ノードのコンフィグをファイルに保存: configs/demo2/
+  <<< 設計完了
+
+[第1回 / 上限5回]  検証エージェント  開始
+  [1/4] CML にデプロイ中...
+    ラボをインポート中...
+    コンフィグを投入中 (3 ノード)...
+    ラボを起動中...
+    ノードの起動を待機中... (タイムアウト: 300s / 3 ノード)
+    起動完了 (lab_id=cf0a8cce-e13e-4c0b-b5c6-cbd44f1c8188)
+  [1/4] デプロイ完了 (lab_id=cf0a8cce-e13e-4c0b-b5c6-cbd44f1c8188)
+  [2/4] テスト計画を立案中...
+  [2/4] テスト計画完了 (6 件)
+  [3/4] テストを実行中... (並列 最大 8 workers)
+        [2/6] Ensure R2 has 2 OSPF neighbors: with R1 and R3. → ✅ PASS  2 neighbor(s) FULL
+        [3/6] Ensure R3 has 2 OSPF neighbors: with R1 and R2. → ✅ PASS  2 neighbor(s) FULL
+        [1/6] Ensure R1 has 2 OSPF neighbors: with R2 and R3. → ✅ PASS  2 neighbor(s) FULL
+        [6/6] Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3. → ✅ PASS  ping 3.3.3.3 OK
+        [4/6] Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2. → ✅ PASS  ping 2.2.2.2 OK
+        [5/6] Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3. → ✅ PASS  ping 3.3.3.3 OK
+  [4/4] 全テスト PASS
+
+  >>> 全テスト PASS! 最終レポートを生成しています...
+  [Phase D] 設計ドキュメント生成完了: configs/demo2 (7 ファイル)
+
+============================================================
+[障害シミュレーション]  開始
+============================================================
+  [障害シミュレーション 1/3] CML からリンク一覧を取得中...
+  [障害シミュレーション 2/3] 障害シナリオを LLM に立案させています (3 リンク)...
+  [障害シミュレーション 2/3] 計画完了 (2 シナリオ): R1-R2間のリンクとR2-R3間のリンクを選びました。R1-R2リンクはR1とR2のプライマリ回線であり、障害時にR1-R3-R2 ルートを通ってトラフィックが継続することを確認します。また、R2-R3リンク障害により、R2-R1-R3ルートのフェイルオーバー動作を確認し、3台間のフルメッシュトポロジーでの冗長性が適切に機能することを検証します。
+  [障害シミュレーション 3/3] 障害シナリオを実行中...
+
+  ▶ シナリオ 1/2: プライマリリンク断時の迂回経路確認
+    CML リンク DOWN: R1 <-> R2 (15s 待機中...)
+    テスト実行（障害中）:
+        (1/6) [障害中] OSPF ネイバー数確認: R1 （期待値: 1）
+               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
+        (2/6) [障害中] OSPF ネイバー数確認: R2 （期待値: 1）
+               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
+        (3/6) [障害中] Ensure R3 has 2 OSPF neighbors: with R1 and R2.
+               → ✅ PASS  2 neighbor(s) FULL
+        (4/6) [障害中] Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2.
+               → ✅ PASS  ping 2.2.2.2 OK
+        (5/6) [障害中] Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3.
+               → ✅ PASS  ping 3.3.3.3 OK
+        (6/6) [障害中] Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3.
+               → ✅ PASS  ping 3.3.3.3 OK
+    CML リンク UP（復旧）: R1 <-> R2 (15s 待機中...)
+    テスト実行（復旧後）:
+        (1/6) [復旧後] Ensure R1 has 2 OSPF neighbors: with R2 and R3.
+               → ✅ PASS  2 neighbor(s) FULL
+        (2/6) [復旧後] Ensure R2 has 2 OSPF neighbors: with R1 and R3.
+               → ✅ PASS  2 neighbor(s) FULL
+        (3/6) [復旧後] Ensure R3 has 2 OSPF neighbors: with R1 and R2.
+               → ✅ PASS  2 neighbor(s) FULL
+        (4/6) [復旧後] Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2.
+               → ✅ PASS  ping 2.2.2.2 OK
+        (5/6) [復旧後] Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3.
+               → ✅ PASS  ping 3.3.3.3 OK
+        (6/6) [復旧後] Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3.
+               → ✅ PASS  ping 3.3.3.3 OK
+    シナリオ結果: ✅ PASS
+
+  ▶ シナリオ 2/2: R2・R3間リンク断時の迂回経路確認
+    CML リンク DOWN: R2 <-> R3 (15s 待機中...)
+    テスト実行（障害中）:
+        (1/6) [障害中] Ensure R1 has 2 OSPF neighbors: with R2 and R3.
+               → ✅ PASS  2 neighbor(s) FULL
+        (2/6) [障害中] OSPF ネイバー数確認: R2 （期待値: 1）
+               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
+        (3/6) [障害中] OSPF ネイバー数確認: R3 （期待値: 1）
+               → ✅ PASS  1 neighbor(s) FULL (expected: 1)
+        (4/6) [障害中] Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2.
+               → ✅ PASS  ping 2.2.2.2 OK
+        (5/6) [障害中] Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3.
+               → ✅ PASS  ping 3.3.3.3 OK
+        (6/6) [障害中] Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3.
+               → ✅ PASS  ping 3.3.3.3 OK
+    CML リンク UP（復旧）: R2 <-> R3 (15s 待機中...)
+    テスト実行（復旧後）:
+        (1/6) [復旧後] Ensure R1 has 2 OSPF neighbors: with R2 and R3.
+               → ✅ PASS  2 neighbor(s) FULL
+        (2/6) [復旧後] Ensure R2 has 2 OSPF neighbors: with R1 and R3.
+               → ✅ PASS  2 neighbor(s) FULL
+        (3/6) [復旧後] Ensure R3 has 2 OSPF neighbors: with R1 and R2.
+               → ✅ PASS  2 neighbor(s) FULL
+        (4/6) [復旧後] Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2.
+               → ✅ PASS  ping 2.2.2.2 OK
+        (5/6) [復旧後] Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3.
+               → ✅ PASS  ping 3.3.3.3 OK
+        (6/6) [復旧後] Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3.
+               → ✅ PASS  ping 3.3.3.3 OK
+    シナリオ結果: ✅ PASS
+
+  [障害シミュレーション 完了] 2/2 シナリオ PASS
+
+  >>> 障害シミュレーションレポートを生成しています...
+# 検証成功レポート
+
+**生成日時**: 2026-07-14 16:41:55
+
+## 要件
+## ネットワーク構成
+
+- 3台のルーター（R1・R2・R3）をフルメッシュ（三角形）で接続すること
+- 各リンクで OSPF エリア 0 を構成すること
+- R1–R2 リンクが断した場合でもR1→R3→R2 の迂回経路でトラフィックが継続するように設計すること
+- ルータ・ルータ間のOSPFのリンクタイプはpoint-to-pointとして設計すること
+- OSPFのHello/Deadのタイマー値は3秒/10秒とすること
+
+## リンク構成
+
+| リンク | 接続 | ネットワーク |
+|---|---|---|
+| R1–R2 | GE0/0 (R1) ↔ GE0/0 (R2) | 10.0.12.0/30 |
+| R1–R3 | GE0/1 (R1) ↔ GE0/0 (R3) | 10.0.13.0/30 |
+| R2–R3 | GE0/1 (R2) ↔ GE0/1 (R3) | 10.0.23.0/30 |
+
+## IPアドレス割り当て
+
+| 機器 | インターフェース | IPアドレス |
+|---|---|---|
+| R1 | GigabitEthernet0/0 | 10.0.12.1/30 |
+| R1 | GigabitEthernet0/1 | 10.0.13.1/30 |
+| R1 | Loopback0 | 1.1.1.1/32 |
+| R2 | GigabitEthernet0/0 | 10.0.12.2/30 |
+| R2 | GigabitEthernet0/1 | 10.0.23.1/30 |
+| R2 | Loopback0 | 2.2.2.2/32 |
+| R3 | GigabitEthernet0/0 | 10.0.13.2/30 |
+| R3 | GigabitEthernet0/1 | 10.0.23.2/30 |
+| R3 | Loopback0 | 3.3.3.3/32 |
+
+## OSPFの設定
+
+- プロセス番号: 1
+- エリア: 0 のみ
+- 全インターフェース（Loopback 含む）を area 0 に参加させること
+- Router-ID は Loopback0 アドレスを使用すること
+
+## 必須検証項目
+
+- R1・R2・R3 の OSPF ネイバーがそれぞれ 2 つ確立していること
+- R1 から 2.2.2.2（R2 Loopback）へ ping が通ること
+- R1 から 3.3.3.3（R3 Loopback）へ ping が通ること
+- R2 から 3.3.3.3（R3 Loopback）へ ping が通ること
+
+## 概要
+- 試行回数: 1 回
+- PASSテスト: 6 件
+- FAILテスト: 0 件
+- ラボID: cf0a8cce-e13e-4c0b-b5c6-cbd44f1c8188
+
+## ネットワーク設計
+
+### トポロジー定義（CML YAML）
+```yaml
+lab:
+  title: agentic-ni-demo2
+  description: "3 routers in a full mesh topology with OSPF configuration."
+  notes: ""
+  timestamp: 0
+  version: "0.1.0"
+
+nodes:
+  - id: "n0"
+    label: "R1"
+    node_definition: "iosv"
+    x: -300
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+  - id: "n1"
+    label: "R2"
+    node_definition: "iosv"
+    x: 0
+    y: -300
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+  - id: "n2"
+    label: "R3"
+    node_definition: "iosv"
+    x: 300
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+
+links:
+  - id: "l0"
+    n1: "n0"
+    i1: "i0"
+    n2: "n1"
+    i2: "i0"
+    label: "l0"
+  - id: "l1"
+    n1: "n0"
+    i1: "i1"
+    n2: "n2"
+    i2: "i0"
+    label: "l1"
+  - id: "l2"
+    n1: "n1"
+    i1: "i1"
+    n2: "n2"
+    i2: "i1"
+    label: "l2"
+```
+
+### 機器コンフィグ
+
+### R1
+```
+hostname R1
+!
+interface Loopback0
+ ip address 1.1.1.1 255.255.255.255
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.1 255.255.255.252
+ ip ospf network point-to-point
+ ip ospf hello-interval 3
+ ip ospf dead-interval 10
+ no shutdown
+!
+interface GigabitEthernet0/1
+ ip address 10.0.13.1 255.255.255.252
+ ip ospf network point-to-point
+ ip ospf hello-interval 3
+ ip ospf dead-interval 10
+ no shutdown
+!
+router ospf 1
+ router-id 1.1.1.1
+ network 0.0.0.0 255.255.255.255 area 0
+!
+end
+```
+
+### R2
+```
+hostname R2
+!
+interface Loopback0
+ ip address 2.2.2.2 255.255.255.255
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.2 255.255.255.252
+ ip ospf network point-to-point
+ ip ospf hello-interval 3
+ ip ospf dead-interval 10
+ no shutdown
+!
+interface GigabitEthernet0/1
+ ip address 10.0.23.1 255.255.255.252
+ ip ospf network point-to-point
+ ip ospf hello-interval 3
+ ip ospf dead-interval 10
+ no shutdown
+!
+router ospf 1
+ router-id 2.2.2.2
+ network 0.0.0.0 255.255.255.255 area 0
+!
+end
+```
+
+### R3
+```
+hostname R3
+!
+interface Loopback0
+ ip address 3.3.3.3 255.255.255.255
+!
+interface GigabitEthernet0/0
+ ip address 10.0.13.2 255.255.255.252
+ ip ospf network point-to-point
+ ip ospf hello-interval 3
+ ip ospf dead-interval 10
+ no shutdown
+!
+interface GigabitEthernet0/1
+ ip address 10.0.23.2 255.255.255.252
+ ip ospf network point-to-point
+ ip ospf hello-interval 3
+ ip ospf dead-interval 10
+ no shutdown
+!
+router ospf 1
+ router-id 3.3.3.3
+ network 0.0.0.0 255.255.255.255 area 0
+!
+end
+```
+
+## 検証テスト結果
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| Ensure R1 has 2 OSPF neighbors: with R2 and R3. | ✅ PASS | 2 neighbor(s) FULL |
+| Ensure R2 has 2 OSPF neighbors: with R1 and R3. | ✅ PASS | 2 neighbor(s) FULL |
+| Ensure R3 has 2 OSPF neighbors: with R1 and R2. | ✅ PASS | 2 neighbor(s) FULL |
+| Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2. | ✅ PASS | ping 2.2.2.2 OK |
+| Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+| Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+
+すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。
+
+---
+
+## 設計ドキュメント（Phase D）
+
+### IP アドレス台帳
+
+| デバイス | インターフェース | アドレス（CIDR） |
+|---|---|---|
+| R1 | Loopback0 | 1.1.1.1/32 |
+| R1 | GigabitEthernet0/0 | 10.0.12.1/30 |
+| R1 | GigabitEthernet0/1 | 10.0.13.1/30 |
+| R2 | Loopback0 | 2.2.2.2/32 |
+| R2 | GigabitEthernet0/0 | 10.0.12.2/30 |
+| R2 | GigabitEthernet0/1 | 10.0.23.1/30 |
+| R3 | Loopback0 | 3.3.3.3/32 |
+| R3 | GigabitEthernet0/0 | 10.0.13.2/30 |
+| R3 | GigabitEthernet0/1 | 10.0.23.2/30 |
+
+### ルーティング設計サマリー
+
+**OSPF**: `R1` (プロセス 1), `R2` (プロセス 1), `R3` (プロセス 1)
+エリア: エリア 0
+
+### 保存先ファイル
+
+- `configs/demo2/topology.yaml`
+- `configs/demo2/R1.cfg`
+- `configs/demo2/R2.cfg`
+- `configs/demo2/R3.cfg`
+- `configs/demo2/ip_ledger.md`
+- `configs/demo2/ip_ledger.csv`
+- `configs/demo2/routing_design.md`
+
+---
+
+## 障害シミュレーション結果
+
+- 実施シナリオ数: 2 件
+- PASS（復旧確認）: 2 件
+- FAIL（復旧未確認）: 0 件
+- **判定: ✅ 全シナリオで復旧を確認**
+
+### プライマリリンク断時の迂回経路確認 (R1 <-> R2) — ✅ PASS
+
+**障害中テスト結果**
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| OSPF ネイバー数確認: R1 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
+| OSPF ネイバー数確認: R2 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
+| Ensure R3 has 2 OSPF neighbors: with R1 and R2. | ✅ PASS | 2 neighbor(s) FULL |
+| Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2. | ✅ PASS | ping 2.2.2.2 OK |
+| Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+| Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+
+**復旧後テスト結果**
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| Ensure R1 has 2 OSPF neighbors: with R2 and R3. | ✅ PASS | 2 neighbor(s) FULL |
+| Ensure R2 has 2 OSPF neighbors: with R1 and R3. | ✅ PASS | 2 neighbor(s) FULL |
+| Ensure R3 has 2 OSPF neighbors: with R1 and R2. | ✅ PASS | 2 neighbor(s) FULL |
+| Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2. | ✅ PASS | ping 2.2.2.2 OK |
+| Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+| Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+
+### R2・R3間リンク断時の迂回経路確認 (R2 <-> R3) — ✅ PASS
+
+**障害中テスト結果**
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| Ensure R1 has 2 OSPF neighbors: with R2 and R3. | ✅ PASS | 2 neighbor(s) FULL |
+| OSPF ネイバー数確認: R2 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
+| OSPF ネイバー数確認: R3 （障害中の期待値: 1） | ✅ PASS | 1 neighbor(s) FULL (expected: 1) |
+| Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2. | ✅ PASS | ping 2.2.2.2 OK |
+| Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+| Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+
+**復旧後テスト結果**
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| Ensure R1 has 2 OSPF neighbors: with R2 and R3. | ✅ PASS | 2 neighbor(s) FULL |
+| Ensure R2 has 2 OSPF neighbors: with R1 and R3. | ✅ PASS | 2 neighbor(s) FULL |
+| Ensure R3 has 2 OSPF neighbors: with R1 and R2. | ✅ PASS | 2 neighbor(s) FULL |
+| Check connectivity from R1 to R2's Loopback interface IP 2.2.2.2. | ✅ PASS | ping 2.2.2.2 OK |
+| Check connectivity from R1 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+| Check connectivity from R2 to R3's Loopback interface IP 3.3.3.3. | ✅ PASS | ping 3.3.3.3 OK |
+iida@s400win:~/git/agentic-ni$
+```

@@ -1,6 +1,6 @@
 lab:
   title: agentic-ni-demo2
-  description: "3 Routers interconnected in a full mesh topology with OSPF configured"
+  description: "3 routers in a full mesh topology with OSPF configuration."
   notes: ""
   timestamp: 0
   version: "0.1.0"
@@ -9,7 +9,7 @@ nodes:
   - id: "n0"
     label: "R1"
     node_definition: "iosv"
-    x: -200
+    x: -300
     y: 0
     configuration: ""
     interfaces:
@@ -21,12 +21,11 @@ nodes:
         label: "GigabitEthernet0/1"
         slot: 1
         type: physical
-
   - id: "n1"
     label: "R2"
     node_definition: "iosv"
     x: 0
-    y: 200
+    y: -300
     configuration: ""
     interfaces:
       - id: "i0"
@@ -37,11 +36,10 @@ nodes:
         label: "GigabitEthernet0/1"
         slot: 1
         type: physical
-
   - id: "n2"
     label: "R3"
     node_definition: "iosv"
-    x: 200
+    x: 300
     y: 0
     configuration: ""
     interfaces:
