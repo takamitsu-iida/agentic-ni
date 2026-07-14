@@ -1092,3 +1092,337 @@ end
 | R2からR3のLoopback0（3.3.3.3）へのパケットが到達可能であることを確認する。 | ✅ PASS | ping 3.3.3.3 OK |
 (agentic-ni) iida@s400win:~/git/agentic-ni$
 ```
+
+<br><br><br>
+
+## 機能追加の例
+
+
+```
+iida@s400win:~/git/agentic-ni$ agentic-ni demo
+プロンプトセット: demo
+
+【要件】
+  ## ネットワーク構成
+  - R1とR2を直接接続する（OSPFエリア0）
+  - R1-R2間リンク: 10.0.12.0/30（R1: 10.0.12.1、R2: 10.0.12.2）
+
+  ## Loopbackインターフェース
+  - R1: Loopback0 = 1.1.1.1/32
+  - R2: Loopback0 = 2.2.2.2/32
+
+  ## OSPFの設定
+  - OSPFエリア0で全インターフェース（Loopback含む）を接続する
+  - Router-IDはLoopback0のアドレスを使用する
+
+  ## iBGPの設定
+  - AS番号: 65000
+  - R1とR2の間でiBGPピアを設定する
+  - BGPピアアドレスはLoopback0のアドレスを使用すること（R1: 1.1.1.1 ↔ R2: 2.2.2.2）
+
+  ## 必須検証項目
+  - R1とR2のOSPFネイバーが確立していること
+  - R1とR2のiBGPセッションが確立していること
+  - R1から 2.2.2.2（R2のLoopback）へpingが通ること
+  - R2から 1.1.1.1（R1のLoopback）へpingが通ること
+
+処理を開始します...
+
+
+============================================================
+[第1回 / 上限5回]  設計エージェント  (初回設計)
+============================================================
+  >>> LLM にトポロジーとコンフィグを生成させています...
+  [知識ベース] rag/ の参考情報を設計プロンプトに追加しました。
+  [Strategy E] 2 ノードのコンフィグをファイルに保存: configs/demo/
+  <<< 設計完了
+
+[第1回 / 上限5回]  検証エージェント  開始
+  [1/4] CML にデプロイ中...
+    ラボをインポート中...
+    コンフィグを投入中 (2 ノード)...
+    ラボを起動中...
+    ノードの起動を待機中... (タイムアウト: 300s / 2 ノード)
+    起動完了 (lab_id=c859068c-c6e4-4571-9f97-e04b6eea710d)
+  [1/4] デプロイ完了 (lab_id=c859068c-c6e4-4571-9f97-e04b6eea710d)
+  [2/4] テスト計画を立案中...
+  [2/4] テスト計画完了 (6 件)
+  [3/4] テストを実行中... (並列 最大 8 workers)
+        [2/6] Verify OSPF neighbors are established on R2. → ✅ PASS  1 neighbor(s) FULL
+        [1/6] Verify OSPF neighbors are established on R1. → ✅ PASS  1 neighbor(s) FULL
+        [4/6] Check iBGP session establishment on R2. → ✅ PASS  1 peer(s) Established
+        [3/6] Check iBGP session establishment on R1. → ✅ PASS  1 peer(s) Established
+        [6/6] Ping from R2 to R1's Loopback to verify connectivity. → ✅ PASS  ping 1.1.1.1 OK
+        [5/6] Ping from R1 to R2's Loopback to verify connectivity. → ✅ PASS  ping 2.2.2.2 OK
+  [4/4] 全テスト PASS
+
+  >>> 全テスト PASS! 最終レポートを生成しています...
+  [Phase D] 設計ドキュメント生成完了: configs/demo (6 ファイル)
+# 検証成功レポート
+
+**生成日時**: 2026-07-14 13:54:01
+
+## 要件
+## ネットワーク構成
+- R1とR2を直接接続する（OSPFエリア0）
+- R1-R2間リンク: 10.0.12.0/30（R1: 10.0.12.1、R2: 10.0.12.2）
+
+## Loopbackインターフェース
+- R1: Loopback0 = 1.1.1.1/32
+- R2: Loopback0 = 2.2.2.2/32
+
+## OSPFの設定
+- OSPFエリア0で全インターフェース（Loopback含む）を接続する
+- Router-IDはLoopback0のアドレスを使用する
+
+## iBGPの設定
+- AS番号: 65000
+- R1とR2の間でiBGPピアを設定する
+- BGPピアアドレスはLoopback0のアドレスを使用すること（R1: 1.1.1.1 ↔ R2: 2.2.2.2）
+
+## 必須検証項目
+- R1とR2のOSPFネイバーが確立していること
+- R1とR2のiBGPセッションが確立していること
+- R1から 2.2.2.2（R2のLoopback）へpingが通ること
+- R2から 1.1.1.1（R1のLoopback）へpingが通ること
+
+## 概要
+- 試行回数: 1 回
+- PASSテスト: 6 件
+- FAILテスト: 0 件
+- ラボID: c859068c-c6e4-4571-9f97-e04b6eea710d
+
+## ネットワーク設計
+
+### トポロジー定義（CML YAML）
+```yaml
+lab:
+  title: agentic-ni-demo
+  description: "Direct connection OSPF and iBGP setup between R1 and R2."
+  notes: ""
+  timestamp: 0
+  version: "0.1.0"
+
+nodes:
+  - id: "n0"
+    label: "R1"
+    node_definition: "iosv"
+    x: -100
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+  - id: "n1"
+    label: "R2"
+    node_definition: "iosv"
+    x: 100
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+
+links:
+  - id: "l0"
+    n1: "n0"
+    i1: "i0"
+    n2: "n1"
+    i2: "i0"
+    label: "l0"
+```
+
+### 機器コンフィグ
+
+### R1
+```
+hostname R1
+!
+interface Loopback0
+ ip address 1.1.1.1 255.255.255.255
+ no shutdown
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.1 255.255.255.252
+ ip ospf network point-to-point
+ no shutdown
+!
+router ospf 1
+ router-id 1.1.1.1
+ network 10.0.12.0 0.0.0.3 area 0
+ network 1.1.1.1 0.0.0.0 area 0
+!
+router bgp 65000
+ bgp router-id 1.1.1.1
+ neighbor 2.2.2.2 remote-as 65000
+ neighbor 2.2.2.2 update-source Loopback0
+ !
+ address-family ipv4 unicast
+  neighbor 2.2.2.2 activate
+ exit-address-family
+!
+end
+```
+
+### R2
+```
+hostname R2
+!
+interface Loopback0
+ ip address 2.2.2.2 255.255.255.255
+ no shutdown
+!
+interface GigabitEthernet0/0
+ ip address 10.0.12.2 255.255.255.252
+ ip ospf network point-to-point
+ no shutdown
+!
+router ospf 1
+ router-id 2.2.2.2
+ network 10.0.12.0 0.0.0.3 area 0
+ network 2.2.2.2 0.0.0.0 area 0
+!
+router bgp 65000
+ bgp router-id 2.2.2.2
+ neighbor 1.1.1.1 remote-as 65000
+ neighbor 1.1.1.1 update-source Loopback0
+ !
+ address-family ipv4 unicast
+  neighbor 1.1.1.1 activate
+ exit-address-family
+!
+end
+```
+
+## 検証テスト結果
+
+| テスト名 | 結果 | 詳細 |
+|---|---|---|
+| Verify OSPF neighbors are established on R1. | ✅ PASS | 1 neighbor(s) FULL |
+| Verify OSPF neighbors are established on R2. | ✅ PASS | 1 neighbor(s) FULL |
+| Check iBGP session establishment on R1. | ✅ PASS | 1 peer(s) Established |
+| Check iBGP session establishment on R2. | ✅ PASS | 1 peer(s) Established |
+| Ping from R1 to R2's Loopback to verify connectivity. | ✅ PASS | ping 2.2.2.2 OK |
+| Ping from R2 to R1's Loopback to verify connectivity. | ✅ PASS | ping 1.1.1.1 OK |
+
+すべてのテストが PASS しました。要件を満たすネットワーク設計が確認されました。
+
+---
+
+## 設計ドキュメント（Phase D）
+
+### IP アドレス台帳
+
+| デバイス | インターフェース | アドレス（CIDR） |
+|---|---|---|
+| R1 | Loopback0 | 1.1.1.1/32 |
+| R1 | GigabitEthernet0/0 | 10.0.12.1/30 |
+| R2 | Loopback0 | 2.2.2.2/32 |
+| R2 | GigabitEthernet0/0 | 10.0.12.2/30 |
+
+### ルーティング設計サマリー
+
+**OSPF**: `R1` (プロセス 1), `R2` (プロセス 1)
+エリア: エリア 0
+
+**BGP**: `R1` (AS 65000, 1 ネイバー), `R2` (AS 65000, 1 ネイバー)
+
+### 保存先ファイル
+
+- `configs/demo/topology.yaml`
+- `configs/demo/R1.cfg`
+- `configs/demo/R2.cfg`
+- `configs/demo/ip_ledger.md`
+- `configs/demo/ip_ledger.csv`
+- `configs/demo/routing_design.md`
+iida@s400win:~/git/agentic-ni$
+iida@s400win:~/git/agentic-ni$
+iida@s400win:~/git/agentic-ni$
+iida@s400win:~/git/agentic-ni$
+iida@s400win:~/git/agentic-ni$ agentic-ni
+使い方: agentic-ni <プロンプトセット名> [オプション]
+
+要件はプロンプトセット内の requirement.md に記載してください。
+
+オプション:
+  --list                 利用可能なプロンプトセット一覧を表示して終了する
+  --dry-run              CMLデプロイをスキップして設計・コンフィグ生成のみ行う
+  --use-topology         configs/<set>/topology.yaml をトポロジーとして使用し、コンフィグのみ生成する
+  --fault-sim            構成検証成功後に障害シミュレーション（リンク断・復旧・再テスト）を実行する
+  --troubleshoot [名前|ID] 既存ラボをトラブルシュート（省略時はラボ名で自動検索）
+  --issue '<説明>'       --troubleshoot と併用する問題の説明（任意）
+  --analyze [名前|ID]    既存ラボの設計を分析してレポートを出力する（変更なし）
+  --improve [名前|ID]    既存ラボのコンフィグを改善して configs/<set>/ に保存する
+  --request '<改善要求>' --improve と併用する改善要求テキスト（任意）
+  --apply-to-live        CML 検証成功後に実機へコンフィグ投入する（要インベントリ）
+  --inventory <path>     --apply-to-live で使うインベントリ YAML のパスを明示指定する
+  --live-verify          --apply-to-live 実行後に pyATS で実機テストを実行する
+  --rag-index [<dir>]    rag/ のテキストファイルを知識ベースに索引化する（要 chromadb）
+  --rag-clear-knowledge  知識ベースのインデックスを全消去する
+  --rag-stats            RAGストアの保存件数と保存場所を表示して終了する
+  --verbose / -v         DEBUG レベルのログを表示する（タイムスタンプ付き）
+  --quiet / -q           WARNING 以上のログのみ表示する
+  -h / --help            このヘルプを表示して終了する
+
+例:
+  agentic-ni demo                              # demo セットの要件で実行
+  agentic-ni ospf_l3vpn                        # ospf_l3vpn セットの要件で実行
+  agentic-ni demo --dry-run                    # CMLなしでコンフィグ生成のみ
+  agentic-ni demo3 --use-topology --dry-run    # 手動作成トポロジーYAMLを使いコンフィグのみ生成
+  agentic-ni demo2 --fault-sim                 # 障害シミュレーションありで実行
+  agentic-ni demo2 --troubleshoot              # demo2 ラボを自動検索しトラブルシュート
+  agentic-ni demo2 --troubleshoot abc-1234     # lab_id を明示してトラブルシュート
+  agentic-ni demo2 --troubleshoot 'agentic-ni-demo2'  # ラボ名を指定してトラブルシュート
+  agentic-ni demo --analyze                    # demo ラボの設計を分析する
+  agentic-ni demo --analyze 'agentic-ni-demo'  # ラボ名を指定して分析する
+  agentic-ni demo --analyze abc-1234           # 指定 lab_id の設計を分析する
+  agentic-ni demo --improve --request 'OSPFにBFDを追加したい'
+  agentic-ni demo --apply-to-live              # CML検証後に実機投入
+  agentic-ni demo --apply-to-live --inventory inventory/prod.yaml --live-verify
+  agentic-ni --list
+  agentic-ni --rag-stats
+iida@s400win:~/git/agentic-ni$ agentic-ni --improve --request 'OSPFに認証を追加したい'
+プロンプトセット: demo
+改善モード: ラボID=(自動検索)
+改善要求: OSPFに認証を追加したい
+
+処理を開始します...
+
+ラボを自動検出: agentic-ni-demo (ID=c859068c-c6e4-4571-9f97-e04b6eea710d)
+
+[設計改善] ラボ c859068c-c6e4-4571-9f97-e04b6eea710d から現状コンフィグを収集中...
+    収集中: R1 ...
+    収集中: R2 ...
+  >>> 改善コンフィグを生成中...
+  改善計画: 2 件の変更 — Implementing OSPF authentication increases network security ...
+  >>> 改善コンフィグを保存しています...
+  保存: configs/demo/R1.cfg
+  保存: configs/demo/R2.cfg
+# 設計改善レポート
+
+**生成日時**: 2026-07-14 13:56:58
+
+**ラボ ID**: c859068c-c6e4-4571-9f97-e04b6eea710d
+
+## 改善計画
+
+### 根拠
+Implementing OSPF authentication increases network security by ensuring that OSPF messages are only accepted from trusted sources. Using message-digest authentication with MD5 hashes prevents unauthorized or malicious OSPF messages from disrupting network operations. The change leverages existing network infrastructure with minimal additional configuration.
+
+### 変更内容 (2 件)
+- Added OSPF message-digest authentication to GigabitEthernet0/0 on both R1 and R2.
+- Configured message-digest key 1 with MD5 on GigabitEthernet0/0 interfaces.
+
+### 保存先ファイル
+
+- `configs/demo/R1.cfg`
+- `configs/demo/R2.cfg`
+
+> **注意**: コンフィグはファイルに保存されましたが、CML ラボには適用していません。
+> 適用するには `agentic-ni demo` を実行してください。
+iida@s400win:~/git/agentic-ni$
+```
