@@ -1,6 +1,6 @@
 lab:
   title: agentic-ni-demo2
-  description: "3 routers in a full mesh topology with OSPF configuration."
+  description: "3 Routers full mesh with OSPF and redundant paths"
   notes: ""
   timestamp: 0
   version: "0.1.0"
@@ -9,7 +9,7 @@ nodes:
   - id: "n0"
     label: "R1"
     node_definition: "iosv"
-    x: -300
+    x: -200
     y: 0
     configuration: ""
     interfaces:
@@ -25,7 +25,7 @@ nodes:
     label: "R2"
     node_definition: "iosv"
     x: 0
-    y: -300
+    y: 0
     configuration: ""
     interfaces:
       - id: "i0"
@@ -39,7 +39,7 @@ nodes:
   - id: "n2"
     label: "R3"
     node_definition: "iosv"
-    x: 300
+    x: 200
     y: 0
     configuration: ""
     interfaces:
