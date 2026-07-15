@@ -2510,6 +2510,31 @@ def _run_live_apply_flow(
 
     print()
     logger.info(result.get("final_report", "(レポートなし)"))
+    _save_report_to_file(result.get("final_report", ""), prompt_set)
+
+
+def _save_report_to_file(report: str, prompt_set: str, mode: str = "") -> Path | None:
+    """最終レポートを Markdown ファイルとして reports/ に保存する。
+
+    Args:
+        report: 保存するレポート本文（Markdown）。空文字の場合は保存しない。
+        prompt_set: プロンプトセット名（ファイル名に使用）。
+        mode: モード名（troubleshoot / analyze / improve / live など）。
+              指定するとファイル名に付与される。
+
+    Returns:
+        Path | None: 保存したファイルのパス。保存しなかった場合は None。
+    """
+    if not report or not report.strip():
+        return None
+    reports_dir = Path("reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    suffix = f"-{mode}" if mode else ""
+    report_path = reports_dir / f"{prompt_set}{suffix}-{timestamp}.md"
+    report_path.write_text(report, encoding="utf-8")
+    logger.info(f"\n  [レポート保存] {report_path}")
+    return report_path
 
 
 def main() -> None:
@@ -2746,6 +2771,7 @@ def main() -> None:
             app = compile_graph_analyze()
             result = app.invoke(initial_state_analyze(analyze_lab_id, prompt_set))
             print(result.get("final_report", "(レポートなし)"))
+            _save_report_to_file(result.get("final_report", ""), prompt_set, mode="analyze")
             return
 
         # 改善モード
@@ -2775,6 +2801,7 @@ def main() -> None:
                 )
             )
             print(result.get("final_report", "(レポートなし)"))
+            _save_report_to_file(result.get("final_report", ""), prompt_set, mode="improve")
             return
 
         # トラブルシューティングモード
@@ -2803,6 +2830,7 @@ def main() -> None:
                 initial_state_troubleshoot(troubleshoot_lab_id, troubleshoot_issue, prompt_set)
             )
             print(result.get("final_report", "(レポートなし)"))
+            _save_report_to_file(result.get("final_report", ""), prompt_set, mode="troubleshoot")
             return
 
         app = compile_graph_dry_run() if dry_run else compile_graph()
@@ -2870,6 +2898,7 @@ def main() -> None:
                 result = app.invoke(initial_state(requirement, prompt_set, fault_simulation_enabled, skip_deploy, existing_lab_id, use_provided_topology))
 
         print(result.get("final_report", "(レポートなし)"))
+        _save_report_to_file(result.get("final_report", ""), prompt_set)
 
         # Phase I: 実機適用モード（--apply-to-live 指定時）
         if apply_to_live and not dry_run:
