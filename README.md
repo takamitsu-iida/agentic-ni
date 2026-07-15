@@ -370,6 +370,14 @@ agentic-ni/
 ├── rag/                     # 知識ベース RAG 用テキストファイル
 ├── configs/                 # 生成された設計ファイル（自動保存）
 ├── inventory/               # 実機インベントリ YAML
+├── prompts/                 # プロンプト（共通 + セット別）
+│   ├── architect_system.md        # 設計エージェント 共通プロンプト
+│   ├── validator_system.md        # 検証エージェント 共通プロンプト
+│   ├── fault_simulator_system.md  # 障害シミュレーション 共通プロンプト
+│   ├── troubleshooter_system.md   # トラブルシューティング 共通プロンプト
+│   ├── demo/                      # サンプルセット（R1-R2 OSPF+iBGP）
+│   ├── demo2/                     # サンプルセット（3 ルータ・障害シミュレーション用）
+│   └── demo3/                     # サンプルセット（R1-R2 eBGP・手動トポロジーYAML）
 │
 ├── src/agentic_ni/
 │   ├── state.py             # LangGraph 共有ステート定義
@@ -382,18 +390,10 @@ agentic-ni/
 │   │   ├── fault_simulator.py  # 障害シミュレーションエージェント
 │   │   └── troubleshooter.py   # トラブルシューティングエージェント
 │   │
-│   ├── tools/
-│   │   ├── cml_tools.py     # virl2_client ラッパー
-│   │   ├── pyats_tools.py   # pyATS/Genie ラッパー
-│   │   └── rag_tools.py     # ChromaDB ラッパー
-│   └── prompts/
-│       ├── architect_system.md        # 設計エージェント 共通プロンプト
-│       ├── validator_system.md        # 検証エージェント 共通プロンプト
-│       ├── fault_simulator_system.md  # 障害シミュレーション 共通プロンプト
-│       ├── troubleshooter_system.md   # トラブルシューティング 共通プロンプト
-│       ├── demo/                      # サンプルセット（R1-R2 OSPF+iBGP）
-│       ├── demo2/                     # サンプルセット（3 ルータ・障害シミュレーション用）
-│       └── demo3/                     # サンプルセット（R1-R2 eBGP・手動トポロジーYAML）
+│   └── tools/
+│       ├── cml_tools.py     # virl2_client ラッパー
+│       ├── pyats_tools.py   # pyATS/Genie ラッパー
+│       └── rag_tools.py     # ChromaDB ラッパー
 └── tests/
 ```
 
