@@ -18,7 +18,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+# プロジェクトルート直下の prompts/ を参照（configs/, rag/ と同じ配置）。
+# agents/prompts.py -> agentic_ni -> src -> <project root>
+PROMPTS_DIR = Path(__file__).parents[3] / "prompts"
 
 
 def load_agent_prompt(agent_name: str, prompt_set: str | None = None) -> str:

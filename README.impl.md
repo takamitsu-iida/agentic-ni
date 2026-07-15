@@ -1279,7 +1279,7 @@ prompts/demo3/
 
 ネットワーク要件の種類に合わせてプロンプトセットを追加できます。
 
-1. `src/agentic_ni/prompts/<セット名>/` ディレクトリを作成します。
+1. `prompts/<セット名>/` ディレクトリを作成します。
 2. `requirement.md`（実行する要件テキスト）を作成します。これのみ必須です。
 3. `validator.md`（必須テスト一覧と固有の失敗パターン）を作成します。任意です。
 4. `architect.md`（設計エージェントへのセット固有ヒント）を作成します。任意です。
@@ -1299,8 +1299,8 @@ prompts/<セット名>/validator.md  ← あれば末尾に追記（必須テス
 
 ```bash
 # 例: BGP 設計用セットを追加
-mkdir -p src/agentic_ni/prompts/bgp_design
-cp src/agentic_ni/prompts/demo/requirement.md src/agentic_ni/prompts/bgp_design/
+mkdir -p prompts/bgp_design
+cp prompts/demo/requirement.md prompts/bgp_design/
 # requirement.md を編集して BGP 要件を記載する
 
 # 追加後に確認
@@ -1322,7 +1322,7 @@ agentic-ni --list
 
 | # | ファイル | 役割 |
 |---|---|---|
-| 1 | `src/agentic_ni/prompts/validator_system.md` | LLM に「このテストタイプが使える」と教える |
+| 1 | `prompts/validator_system.md` | LLM に「このテストタイプが使える」と教える |
 | 2 | `src/agentic_ni/agents/validator.py` の `TestItem.test_type` | LLM の出力値を Pydantic の `Literal` 型で制約する |
 | 3 | `src/agentic_ni/agents/validator.py` の `_execute_test()` | テストタイプに対応する `pyats_tools` 関数を呼び出す |
 

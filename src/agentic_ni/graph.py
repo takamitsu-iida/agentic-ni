@@ -1435,7 +1435,8 @@ def initial_state_improve(
 def load_requirement(prompt_set: str) -> str:
     """prompt_set ディレクトリの requirement.md を読み込んで返す。"""
     from pathlib import Path
-    prompts_dir = Path(__file__).parent / "prompts"
+    # プロジェクトルート直下の prompts/ を参照（graph.py -> agentic_ni -> src -> root）
+    prompts_dir = Path(__file__).parents[2] / "prompts"
     path = prompts_dir / prompt_set / "requirement.md"
     if not path.exists():
         raise FileNotFoundError(
