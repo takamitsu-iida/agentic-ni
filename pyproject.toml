@@ -37,16 +37,24 @@ live = [
 checkpoint = [
     "langgraph-checkpoint-sqlite>=2.0",
 ]
+distributed = [
+    "paho-mqtt>=2.0",   # MQTTBus バックエンド
+    "nats-py>=2.3",     # NATSBus バックエンド
+]
 all = [
     "pyats>=24.0",
     "genie>=24.0",
     "chromadb>=0.5",
     "pysqlite3-binary>=0.5",
     "langgraph-checkpoint-sqlite>=2.0",
+    "paho-mqtt>=2.0",
+    "nats-py>=2.3",
 ]
 
 [project.scripts]
 agentic-ni = "agentic_ni.graph:main"
+agentic-ni-ts = "agentic_ni.distributed.orchestrator:main"
+agentic-ni-demo = "agentic_ni.distributed.demo_runner:main"
 
 [build-system]
 requires = ["hatchling"]
