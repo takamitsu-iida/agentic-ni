@@ -13,6 +13,8 @@
 | TS-3 | Device Tools 実装 | ✅ 完了 | 3 / 3 |
 | TS-4 | Orchestrator 実装 | ✅ 完了 | 4 / 4 |
 | TS-5 | プロンプト設計と E2E 検証 | ✅ 完了 | 3 / 3 |
+| Scale-1 | TTL 完全実装 | ✅ 完了 | 4 / 4 |
+| Scale-2 | イベントデデュープ | ✅ 完了 | 4 / 4 |
 
 > 凡例: 🔲 未着手 / 🔄 進行中 / ✅ 完了
 
@@ -323,3 +325,184 @@ Week 5:  Phase TS-5 (プロンプト・E2E テスト) + レポート生成
 | メッセージループ（A→B→A の無限連鎖） | `message_id` チェーンで循環検知し最大ホップ数（デフォルト 5）で打ち切る |
 | MQTT/NATS サーバー未整備時の開発効率 | Phase TS-1 で `InMemoryBus` を優先実装し、外部 MQ なしでテスト可能にする |
 | pyATS が接続できない環境でのテスト | `device_tools.py` に `MockDeviceTools` を実装しオフライン単体テストを実現 |
+
+---
+
+## スケーラビリティ強化フェーズ
+
+> **背景**: ノード数増加時の O(N²) メッセージ爆発とアラームストームを防ぐため、TTL 完全実装とイベントデデュープを追加する。
+
+### 現状のギャップ
+
+| 機能 | 状態 | 場所 |
+|---|---|---|
+| `hop_count` フィールド | ✅ 存在 | `message.py` |
+| バスでのホップ数チェック | ⚠️ `>` のバグあり（`>=` が正しい） | `bus.py` |
+| 転送時の `hop_count` インクリメント | ❌ 未実装 | `device_agent.py` |
+| バス側の `message_id` 重複チェック | ❌ 未実装 | `bus.py` |
+| syslog フィンガープリント | ❌ 未実装 | なし |
+| エージェント側のデデュープ窓 | ❌ 未実装 | `device_agent.py` |
+
+---
+
+### Phase Scale-1: TTL 完全実装　✅ 完了
+
+**目標**: ホップ数制限を実際に機能させ、転送チェーン全体でホップ数が正しく伝播するようにする。
+
+**実装ファイル**: `src/agentic_ni/distributed/bus.py`, `message.py`, `device_agent.py`
+
+#### タスク
+
+- [x] 1. **`bus.py` のチェック条件修正（バグ修正）**
+
+  `MAX_HOP_COUNT` 丁度のメッセージが通過するバグを修正する。
+
+  ```python
+  # 修正前
+  if message.hop_count > MAX_HOP_COUNT:
+  # 修正後
+  if message.hop_count >= MAX_HOP_COUNT:
+  ```
+
+- [x] 2. **`message.py` に `origin_message_id` フィールドを追加**
+
+  転送チェーンの根源となる `message_id` を追跡し、ループ検知の精度を上げる。
+
+  ```python
+  origin_message_id: str | None = None
+  # 転送チェーンの根源 message_id。最初の送信者は None のまま送り、
+  # 転送側がここに元の message_id をセットする。
+  ```
+
+- [x] 3. **`device_agent.py` で `hop_count` および `origin_message_id` を引き継ぐ**
+
+  `_process_event()` の冒頭で処理中イベントを `self._current_event` として保持し、
+  `_route_output()` での送信時に引き継ぐ。
+
+  ```python
+  # _process_event() の冒頭
+  self._current_event: AgentEvent = event
+
+  # _route_output() 内でのメッセージ生成
+  if isinstance(self._current_event, BusMessageEvent):
+      hop = self._current_event.message.hop_count + 1
+      origin_id = (self._current_event.message.origin_message_id
+                   or self._current_event.message.message_id)
+  else:  # SyslogEvent / PollEvent は新規発火
+      hop = 0
+      origin_id = None
+
+  msg = AgentMessage(..., hop_count=hop, origin_message_id=origin_id)
+  ```
+
+- [x] 4. **テスト追加** (`tests/test_distributed_bus.py`)
+
+  - `hop_count = MAX_HOP_COUNT - 1` → バスを通過すること
+  - `hop_count = MAX_HOP_COUNT` → バスで破棄されること
+  - 3エージェント間の転送チェーンで `hop_count` が 0 → 1 → 2 と積み上がること
+  - `origin_message_id` が転送チェーン全体で同一の値を持つこと
+
+**完了条件**: N ホップ以上の連鎖をバスが確実に遮断し、その境界値テストが通ること。
+
+---
+
+### Phase Scale-2: イベントデデュープ　✅ 完了
+
+**目標**: 同一障害由来の重複イベントをエージェントが二重処理しないようにする。
+
+**実装ファイル**: `src/agentic_ni/distributed/dedup.py`（新規）, `bus.py`, `device_agent.py`
+
+#### タスク
+
+- [x] 1. **`dedup.py` を新規作成**
+
+  2 つのクラスを実装する。
+
+  **`MessageDeduplicator`**: バスメッセージの `message_id` 重複チェック用。
+  ```python
+  class MessageDeduplicator:
+      """同一 message_id の二重配信を防ぐ TTL 付き重複チェッカー。"""
+      def __init__(self, window_seconds: int = 300) -> None: ...
+      def is_duplicate(self, message_id: str) -> bool: ...
+      def mark_seen(self, message_id: str) -> None: ...
+      def cleanup(self) -> None:  # 期限切れエントリを削除（メモリリーク防止）
+  ```
+
+  **`SyslogDeduplicator`**: syslog テキストのフィンガープリント重複チェック用。
+  ```python
+  class SyslogDeduplicator:
+      """同一障害由来の syslog を dedup_window 秒以内で重複とみなすチェッカー。"""
+      def __init__(self, window_seconds: int = 60) -> None: ...
+      def fingerprint(self, raw_text: str) -> str:
+          # タイムスタンプ・シーケンス番号・変動カウンターを正規表現で除去し
+          # %OSPF-5-ADJCHG のような不変部分をキーとして返す
+      def is_duplicate(self, agent_id: str, raw_text: str) -> bool: ...
+      def mark_seen(self, agent_id: str, raw_text: str) -> None: ...
+      def cleanup(self) -> None:
+  ```
+
+  フィンガープリント正規化の例:
+  ```
+  入力: "*Aug  9 12:34:56.789: %OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 on Gi0/0 from FULL to DOWN"
+  出力: "%OSPF-5-ADJCHG: Process *, Nbr * on * from FULL to DOWN"
+  ```
+
+- [x] 2. **`InMemoryBus` に `MessageDeduplicator` を組み込む** (`bus.py`)
+
+  ```python
+  class InMemoryBus(MessageBus):
+      def __init__(self) -> None:
+          ...
+          self._msg_dedup = MessageDeduplicator(window_seconds=300)
+
+      async def publish(self, topic, message):
+          if self._msg_dedup.is_duplicate(message.message_id):
+              logger.debug("重複 message_id を破棄: %s", message.message_id)
+              return
+          self._msg_dedup.mark_seen(message.message_id)
+          ...
+  ```
+
+- [x] 3. **`DeviceAgent.inject_event()` に `SyslogDeduplicator` を組み込む** (`device_agent.py`)
+
+  ```python
+  class DeviceAgent:
+      def __init__(self, ...):
+          ...
+          self._syslog_dedup = SyslogDeduplicator(window_seconds=60)
+
+      async def inject_event(self, event: AgentEvent) -> None:
+          if isinstance(event, SyslogEvent):
+              if self._syslog_dedup.is_duplicate(self.agent_id, event.raw_text):
+                  logger.info("[%s] 重複 syslog を破棄: %s", self.agent_id, event.raw_text[:60])
+                  return
+              self._syslog_dedup.mark_seen(self.agent_id, event.raw_text)
+          await self._event_queue.put(event)
+  ```
+
+- [x] 4. **テスト追加** (`tests/test_distributed_dedup.py`（新規）)
+
+  - 60 秒窓内に同一フィンガープリントの syslog が来た場合 → 2 件目が破棄されること
+  - 61 秒後（窓外）に同一 syslog が来た場合 → 処理されること
+  - 異なるフィンガープリント（別障害）→ 両方とも処理されること
+  - 同一 `message_id` のバスメッセージ → バスで破棄されること
+  - `cleanup()` 呼び出し後に期限切れエントリが消えること
+
+**完了条件**: 同一障害を連続注入しても LLM 呼び出しが 1 回のみになること。
+
+---
+
+### Scale フェーズの実装順序
+
+```
+Scale-1-1（バグ修正: bus.py）
+    ↓
+Scale-1-2（message.py フィールド追加）
+    ↓
+Scale-1-3（device_agent.py ホップ引き継ぎ）  ←── Scale-2-1（dedup.py 新規作成）と並行可
+Scale-2-1
+    ↓
+Scale-1-4 + Scale-2-2 + Scale-2-3（組み込み）
+    ↓
+Scale-2-4（テスト）
+```

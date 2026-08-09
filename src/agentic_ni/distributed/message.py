@@ -38,3 +38,6 @@ class AgentMessage(BaseModel):
 
     hop_count: int = 0
     """エージェント間転送回数。ループ検知に使用。"""
+
+    origin_message_id: str | None = None
+    """転送チェーンの根源 message_id。最初の送信者は None のまま送り、転送側が元の message_id をセットする。"""

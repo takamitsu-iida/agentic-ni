@@ -35,6 +35,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Awaitable, Callable
 
+from agentic_ni.distributed.dedup import MessageDeduplicator
 from agentic_ni.distributed.message import AgentMessage
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ class InMemoryBus(MessageBus):
         # pattern -> list[handler]
         self._handlers: dict[str, list[AsyncHandlerFunc]] = defaultdict(list)
         self._closed = False
+        self._msg_dedup = MessageDeduplicator(window_seconds=300)
 
     async def connect(self) -> None:
         self._closed = False
@@ -123,9 +125,13 @@ class InMemoryBus(MessageBus):
     async def publish(self, topic: str, message: AgentMessage) -> None:
         if self._closed:
             return
-        if message.hop_count > MAX_HOP_COUNT:
+        if self._msg_dedup.is_duplicate(message.message_id):
+            logger.debug("重複 message_id を破棄: %s", message.message_id)
+            return
+        self._msg_dedup.mark_seen(message.message_id)
+        if message.hop_count >= MAX_HOP_COUNT:
             logger.warning(
-                "メッセージのホップ数が上限（%d）を超えました。破棄します: %s",
+                "メッセージのホップ数が上限（%d）に達しました。破棄します: %s",
                 MAX_HOP_COUNT,
                 message.message_id,
             )

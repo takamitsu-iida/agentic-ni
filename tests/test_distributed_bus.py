@@ -240,3 +240,100 @@ class TestCreateBus:
         """nats-py が未インストールの場合 connect() で ImportError になること。"""
         bus = create_bus("nats", url="nats://localhost:4222")
         assert bus is not None
+
+
+# ---------------------------------------------------------------------------
+# Scale-1-4: TTL 境界値テスト
+# ---------------------------------------------------------------------------
+
+class TestTTLBoundary:
+    async def test_hop_count_below_limit_passes(self):
+        """MAX_HOP_COUNT - 1 のメッセージはバスを通過すること。"""
+        from agentic_ni.distributed.bus import MAX_HOP_COUNT
+        bus = InMemoryBus()
+        received: list[AgentMessage] = []
+
+        async def handler(topic, msg): received.append(msg)
+        await bus.subscribe("network/agents/chat", handler)
+
+        msg = _make_msg(hop_count=MAX_HOP_COUNT - 1)
+        await bus.publish("network/agents/chat", msg)
+        assert len(received) == 1
+
+    async def test_hop_count_at_limit_drops(self):
+        """MAX_HOP_COUNT 丁度のメッセージはバスで破棄されること。"""
+        from agentic_ni.distributed.bus import MAX_HOP_COUNT
+        bus = InMemoryBus()
+        received: list[AgentMessage] = []
+
+        async def handler(topic, msg): received.append(msg)
+        await bus.subscribe("network/agents/chat", handler)
+
+        msg = _make_msg(hop_count=MAX_HOP_COUNT)
+        await bus.publish("network/agents/chat", msg)
+        assert len(received) == 0
+
+    async def test_hop_count_accumulates_across_forward_chain(self):
+        """3 エージェント間の転送チェーンで hop_count が 0→1→2 と積み上がること。"""
+        bus = InMemoryBus()
+        forwarded: list[AgentMessage] = []
+
+        async def capture(topic, msg): forwarded.append(msg)
+        await bus.subscribe("network/agents/#", capture)
+
+        # Agent-R1 が新規発火（hop=0）
+        msg0 = _make_msg(from_agent="Agent-R1", to_agent="Agent-R2", hop_count=0)
+        await bus.publish("network/agents/Agent-R2/direct", msg0)
+
+        # Agent-R2 が転送（hop=1）
+        msg1 = AgentMessage(
+            from_agent="Agent-R2",
+            to_agent="Agent-R3",
+            msg_type="query",
+            content="転送",
+            hop_count=msg0.hop_count + 1,
+            origin_message_id=msg0.message_id,
+        )
+        await bus.publish("network/agents/Agent-R3/direct", msg1)
+
+        assert forwarded[0].hop_count == 0
+        assert forwarded[1].hop_count == 1
+        assert forwarded[1].origin_message_id == msg0.message_id
+
+    async def test_origin_message_id_same_across_chain(self):
+        """転送チェーン全体で origin_message_id が最初のメッセージの ID を保持すること。"""
+        origin = _make_msg(from_agent="Agent-R1", to_agent="Agent-R2")
+
+        # 1 ホップ目の転送
+        hop1 = AgentMessage(
+            from_agent="Agent-R2",
+            to_agent="Agent-R3",
+            msg_type="query",
+            content="hop1",
+            hop_count=1,
+            origin_message_id=origin.message_id,
+        )
+        # 2 ホップ目の転送（origin_message_id は引き継ぐ）
+        hop2 = AgentMessage(
+            from_agent="Agent-R3",
+            to_agent="Agent-R4",
+            msg_type="query",
+            content="hop2",
+            hop_count=2,
+            origin_message_id=hop1.origin_message_id or hop1.message_id,
+        )
+        assert hop2.origin_message_id == origin.message_id
+
+    async def test_duplicate_message_id_dropped(self):
+        """同一 message_id のメッセージは 2 回目以降バスで破棄されること。"""
+        bus = InMemoryBus()
+        received: list[AgentMessage] = []
+
+        async def handler(topic, msg): received.append(msg)
+        await bus.subscribe("network/agents/chat", handler)
+
+        msg = _make_msg()
+        await bus.publish("network/agents/chat", msg)
+        await bus.publish("network/agents/chat", msg)  # 同一 message_id の再送
+
+        assert len(received) == 1

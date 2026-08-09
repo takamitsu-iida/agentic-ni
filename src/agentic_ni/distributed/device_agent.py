@@ -24,6 +24,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agentic_ni.distributed.bus import MessageBus
+from agentic_ni.distributed.dedup import SyslogDeduplicator
 from agentic_ni.distributed.memory import DeviceMemory
 from agentic_ni.distributed.message import AgentMessage
 from agentic_ni.distributed.prompts import build_device_prompt
@@ -145,6 +146,8 @@ class DeviceAgent:
         self._event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         self._running = False
         self._task: asyncio.Task | None = None
+        self._current_event: AgentEvent | None = None  # hop_count 引き継ぎ用
+        self._syslog_dedup = SyslogDeduplicator(window_seconds=60)
         # デモ・可視化用フック（None の場合は無効）
         self.on_tool_call: "Callable[[str, str, dict], None] | None" = None
         self.on_llm_turn: "Callable[[str, int], None] | None" = None
@@ -180,6 +183,13 @@ class DeviceAgent:
 
     async def inject_event(self, event: AgentEvent) -> None:
         """外部からイベントを注入する（syslog・ポーリング結果等）。"""
+        if isinstance(event, SyslogEvent):
+            if self._syslog_dedup.is_duplicate(self.agent_id, event.raw_text):
+                logger.info(
+                    "[%s] 重複 syslog を破棄: %s", self.agent_id, event.raw_text[:80]
+                )
+                return
+            self._syslog_dedup.mark_seen(self.agent_id, event.raw_text)
         await self._event_queue.put(event)
 
     async def wait_idle(self) -> None:
@@ -217,6 +227,7 @@ class DeviceAgent:
 
     async def _process_event(self, event: AgentEvent) -> None:
         """イベントを LLM に渡して推論し、ツール呼び出しループ後に結果をルーティングする。"""
+        self._current_event = event
         summary = _event_summary(event)
         self._memory.add_status(_event_source(event), summary)
         logger.debug("[%s] イベント処理: %s", self.agent_id, summary[:80])
@@ -313,11 +324,23 @@ class DeviceAgent:
             else:
                 # 他エージェント or ALL へバス送信
                 is_broadcast = target.upper() == "ALL"
+                # BusMessageEvent の場合は転送なのでホップ数をインクリメントして引き継ぐ
+                if isinstance(self._current_event, BusMessageEvent):
+                    hop = self._current_event.message.hop_count + 1
+                    origin_id = (
+                        self._current_event.message.origin_message_id
+                        or self._current_event.message.message_id
+                    )
+                else:  # SyslogEvent / PollEvent は新規発火
+                    hop = 0
+                    origin_id = None
                 msg = AgentMessage(
                     from_agent=self.agent_id,
                     to_agent=target,
                     msg_type="alert" if is_broadcast else "query",
                     content=content,
+                    hop_count=hop,
+                    origin_message_id=origin_id,
                 )
                 topic = (
                     "network/agents/chat"
