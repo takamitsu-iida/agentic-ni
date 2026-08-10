@@ -29,7 +29,7 @@ from agentic_ni.logger import get_logger
 logger = get_logger(__name__)
 
 # プロジェクトルートからの configs ディレクトリ
-_CONFIGS_DIR = Path(__file__).parent.parent.parent / "configs"
+_CONFIGS_DIR = Path(__file__).parent.parent.parent / "trouble_shooting" / "configs"
 
 
 def _load_configs(config_name: str) -> tuple[str, dict[str, str]]:
