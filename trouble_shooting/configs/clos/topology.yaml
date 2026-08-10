@@ -465,8 +465,8 @@ nodes:
       runcmd:
         - netplan apply
         - apt-get update -qq
-        - apt-get install -y -qq python3-pip git
-        - pip3 install uv --quiet
+        - apt-get install -y -qq python3-pip git curl
+        - curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
         - git clone https://github.com/takamitsu-iida/agentic-ni.git /home/cisco/agentic-ni
     interfaces:
       - id: "i0"
