@@ -430,7 +430,7 @@ nodes:
     y: 200
     configuration: |
       #cloud-config
-      hostname: ubuntu-agent
+      hostname: ubuntu
       manage_etc_hosts: true
 
       users:
@@ -443,6 +443,14 @@ nodes:
         list: |
           cisco:cisco
         expire: false
+
+      ssh_pwauth: true
+      ssh_authorized_keys:
+        - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDdnRSDloG0LXnwXEoiy5YU39Sm6xTfvcpNm7az6An3rCfn2QC2unIWyN6sFWbKurGoZtA6QdKc8iSPvYPMjrS6P6iBW/cUJcoU8Y8BwUCnK33iKdCfkDWVDdNGN7joQ6DejhKTICTmcBJmwN9utJQVcagCO66Y76Xauub5WHs9BdAvpr+FCQh0eEQ7WZF1BQvH+bPXGmRxPQ8ViHvlUdgsVEq6kv9e/plh0ziXmkBXAw0bdquWu1pArX76jugQ4LXEJKgmQW/eBNiDgHv540nIH5nPkJ7OYwr8AbRCPX52vWhOr500U4U9n2FIVtMKkyVLHdLkx5kZ+cRJgOdOfMp8vaiEGI6Afl/q7+6n17SpXpXjo4G/NOE/xnjZ787jDwOkATiUGfCqLFaITaGsVcUL0vK2Nxb/tV5a2Rh1ELULIzPP0Sw5X2haIBLUKmQ/lmgbUDG6fqmb1z8XTon1DJQSLQXiojinknBKcMH4JepCrsYTAkpOsF6Y98sZKNIkAqU= iida@FCCLS0008993-00
+
+      timezone: Asia/Tokyo
+      locale: en_US.UTF-8
+
 
       # ens2: 192.168.100.1/30 (管理セグメント / Leaf1 直結)
       # ens3: DHCP (external-connector 経由でインターネット)
@@ -465,9 +473,60 @@ nodes:
       runcmd:
         - netplan apply
         - apt-get update -qq
-        - apt-get install -y -qq python3-pip git curl
+        - apt-get install -y -qq python3-pip git curl jq yq libxml2-utils zip unzip make python3-venv direnv
+
         - curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
         - git clone https://github.com/takamitsu-iida/agentic-ni.git /home/cisco/agentic-ni
+        - chown -R cisco:cisco /home/cisco/agentic-ni
+
+        # Resize terminal window
+        - |
+          cat - << 'EOS' >> /etc/bash.bashrc
+          #
+          rsz () { if [[ -t 0 ]]; then local escape r c prompt=$(printf '\\e7\\e[r\\e[999;999H\\e[6n\\e8'); IFS='[;' read -sd R -p "$prompt" escape r c; stty cols $c rows $r; fi; }
+          rsz
+          EOS
+
+        # TERM
+        - |
+          cat - << 'EOS' >> /etc/bash.bashrc
+          #
+          export TERM="linux"
+          EOS
+
+        # direnv
+        - |
+          cat - << 'EOS' >> /etc/bash.bashrc
+          # direnv
+          eval "$(direnv hook bash)"
+          export EDITOR=vi
+          EOS
+
+        # Disable SSH client warnings
+        - |
+          cat - << 'EOS' > /etc/ssh/ssh_config.d/99_lab_env.conf
+          KexAlgorithms +diffie-hellman-group14-sha1,diffie-hellman-group1-sha1
+          Ciphers +aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc,aes128-ctr,aes192-ctr,aes256-ctr
+          StrictHostKeyChecking no
+          UserKnownHostsFile=/dev/null
+          EOS
+
+        # Create SSH keys
+        - sudo -u cisco ssh-keygen -t rsa -b 4096 -N "" -f /home/cisco/.ssh/id_rsa
+        - chmod 600 /home/cisco/.ssh/id_rsa*
+        - chmod 700 /home/cisco/.ssh
+
+        # Disable systemd-networkd-wait-online.service to speed up boot time
+        - systemctl stop     systemd-networkd-wait-online.service
+        - systemctl disable systemd-networkd-wait-online.service
+        - systemctl mask    systemd-networkd-wait-online.service
+        - netplan apply
+
+        # Disable AppArmor
+        - systemctl stop apparmor.service
+        - systemctl disable apparmor.service
+        - systemctl mask apparmor.service
+
     interfaces:
       - id: "i0"
         label: "ens2"
