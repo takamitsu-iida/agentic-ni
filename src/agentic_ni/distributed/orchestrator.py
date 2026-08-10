@@ -137,11 +137,13 @@ class AgentOrchestrator:
     """topology.yaml を読み込み、DeviceAgent を生成・起動・管理するオーケストレーター。
 
     Args:
-        bus:             使用する MessageBus（connect 済みであること）。
-        llm:             全エージェントで共用する LLM インスタンス。None で get_llm() を使用。
-        toolkit_factory: ``(device_name: str) -> DeviceToolkit`` を返す callable。
-                         None の場合はツールなしでエージェントを起動する。
-        readonly:        Write ツールを無効化するフラグ（デフォルト True）。
+        bus:              使用する MessageBus（connect 済みであること）。
+        llm:              全エージェントで共用する LLM インスタンス。None で get_llm() を使用。
+        toolkit_factory:  ``(device_name: str) -> DeviceToolkit`` を返す callable。
+                          None の場合はツールなしでエージェントを起動する。
+        readonly:         Write ツールを無効化するフラグ（デフォルト True）。
+        log_poll_interval: 各エージェントが show logging をポーリングする間隔（秒）。
+                           0.0 の場合はログポーリングを無効化する（デフォルト）。
     """
 
     def __init__(
@@ -150,11 +152,13 @@ class AgentOrchestrator:
         llm: Any | None = None,
         toolkit_factory: Callable[[str], Any] | None = None,
         readonly: bool = True,
+        log_poll_interval: float = 0.0,
     ) -> None:
         self._bus = bus
         self._llm = llm
         self._toolkit_factory = toolkit_factory
         self._readonly = readonly
+        self._log_poll_interval = log_poll_interval
         self._agents: dict[str, DeviceAgent] = {}  # agent_id → DeviceAgent
         self.human_queue: asyncio.Queue = asyncio.Queue()
 
@@ -193,6 +197,7 @@ class AgentOrchestrator:
         for neighbor in neighbors:
             memory.set_neighbor(neighbor.agent_id, neighbor)
 
+        toolkit = None
         tools = []
         if self._toolkit_factory is not None:
             toolkit = self._toolkit_factory(node_info.label)
@@ -208,13 +213,18 @@ class AgentOrchestrator:
             tools=tools,
             human_queue=self.human_queue,
         )
+
+        if self._log_poll_interval > 0 and toolkit is not None and hasattr(toolkit, "make_log_poller"):
+            agent._log_poller = toolkit.make_log_poller(agent, poll_interval=self._log_poll_interval)
+
         await agent.start()
         self._agents[node_info.agent_id] = agent
         logger.info(
-            "  起動: %s (%s) — 隣接: %s",
+            "  起動: %s (%s) — 隣接: %s%s",
             node_info.agent_id,
             node_info.device_type,
             [n.agent_id for n in neighbors] or "なし",
+            f"  [ログ監視: {self._log_poll_interval}s]" if self._log_poll_interval > 0 else "",
         )
         return agent
 

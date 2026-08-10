@@ -145,6 +145,13 @@ def main() -> None:
         help="show コマンドをモックにする（CML接続・pyATS不要）。オフライン確認用",
     )
     parser.add_argument(
+        "--log-poll-interval", type=float, default=0.0, metavar="SEC",
+        help=(
+            "各エージェントが show logging をポーリングする間隔（秒）。"
+            "0（デフォルト）の場合は無効。例: --log-poll-interval 10"
+        ),
+    )
+    parser.add_argument(
         "--bus", default="memory", choices=["memory", "mqtt", "nats"],
         help="メッセージバスのバックエンド（デフォルト: memory）",
     )
@@ -189,7 +196,11 @@ async def _async_main(args: argparse.Namespace) -> None:
         toolkit_factory = lambda name: CMLDeviceToolkit(name, lab_id=lab_id)
 
     # エージェント起動
-    orchestrator = AgentOrchestrator(bus=bus, toolkit_factory=toolkit_factory)
+    orchestrator = AgentOrchestrator(
+        bus=bus,
+        toolkit_factory=toolkit_factory,
+        log_poll_interval=args.log_poll_interval,
+    )
     await orchestrator.start_from_topology(topo_path)
 
     print()
@@ -206,30 +217,39 @@ async def _async_main(args: argparse.Namespace) -> None:
     print(_c(_BOLD, f"  {'─' * 60}"))
     print()
 
-    # CML ウォッチャー起動
-    watcher = CMLStateWatcher(
-        lab_id=args.lab_id,
-        orchestrator=orchestrator,
-        poll_interval=args.poll_interval,
-    )
-    try:
-        await watcher.start()
-    except Exception as exc:
-        print(
-            f"{_c(_RED, '[ERROR]')} CML 接続に失敗しました: {exc}\n"
-            f"  .env の CML_URL / CML_USERNAME / CML_PASSWORD を確認してください。",
-            file=sys.stderr,
+    # CML ウォッチャー起動（--log-poll-interval 指定時はスキップ）
+    watcher: CMLStateWatcher | None = None
+    if args.log_poll_interval <= 0:
+        watcher = CMLStateWatcher(
+            lab_id=args.lab_id,
+            orchestrator=orchestrator,
+            poll_interval=args.poll_interval,
         )
-        await orchestrator.stop_all()
-        await bus.close()
-        sys.exit(1)
+        try:
+            await watcher.start()
+        except Exception as exc:
+            print(
+                f"{_c(_RED, '[ERROR]')} CML 接続に失敗しました: {exc}\n"
+                f"  .env の CML_URL / CML_USERNAME / CML_PASSWORD を確認してください。",
+                file=sys.stderr,
+            )
+            await orchestrator.stop_all()
+            await bus.close()
+            sys.exit(1)
 
-    print(
-        f"  {_c(_YELLOW + _BOLD, '👁  CML 監視中')}"
-        f"  lab_id={_c(_BOLD, args.lab_id)}"
-        f"  poll={args.poll_interval}s"
-    )
-    print(f"  {_c(_DIM, 'CML でリンクまたはノードを停止するとエージェントが自動的に動き出します。')}")
+        print(
+            f"  {_c(_YELLOW + _BOLD, '👁  CML 監視中')}"
+            f"  lab_id={_c(_BOLD, args.lab_id)}"
+            f"  poll={args.poll_interval}s"
+        )
+        print(f"  {_c(_DIM, 'CML でリンクまたはノードを停止するとエージェントが自動的に動き出します。')}")
+    else:
+        print(
+            f"  {_c(_YELLOW + _BOLD, '📋 ログ直接監視モード')}"
+            f"  log-poll={args.log_poll_interval}s"
+            f"  (CMLStateWatcher 無効)"
+        )
+        print(f"  {_c(_DIM, '各エージェントが自装置の show logging を直接ポーリングします。')}")
     print(f"  {_c(_DIM, 'Ctrl+C で停止します。')}")
     print()
 
@@ -245,7 +265,8 @@ async def _async_main(args: argparse.Namespace) -> None:
     try:
         await shutdown_event.wait()
     finally:
-        await watcher.stop()
+        if watcher is not None:
+            await watcher.stop()
         await orchestrator.stop_all()
         await bus.close()
         print(f"  {_c(_GREEN, '✓')} シャットダウン完了。")

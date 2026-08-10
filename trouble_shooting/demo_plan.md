@@ -159,6 +159,32 @@ uv run agentic-ni-lab fault --title agentic-ni-demo-large --node n3 --down
 # → R4 に隣接する R1/R2/R8/R9 へ syslog が自動注入される
 ```
 
+### ログ直接監視モード（各エージェントが自装置の syslog を直接ポーリング）
+
+CMLStateWatcher を使わず、各 DeviceAgent が `show logging` を定期実行して自装置のイベントを直接検知する。
+
+```bash
+# --log-poll-interval を指定すると CMLStateWatcher は無効になる
+uv run agentic-ni-watch \
+    --lab-id <lab_id> \
+    --topology configs/demo-large/topology.yaml \
+    --log-poll-interval 10   # 各エージェントが 10 秒ごとに show logging を実行
+```
+
+起動後の表示例:
+```
+  エージェント起動完了: 10 台
+  ✓ Agent-R1  隣接: Agent-R2, Agent-R3, Agent-R4, Agent-R5  [ログ監視: 10.0s]
+  ...
+  📋 ログ直接監視モード  log-poll=10s  (CMLStateWatcher 無効)
+  各エージェントが自装置の show logging を直接ポーリングします。
+```
+
+| モード | 起動コマンド | イベント検知元 |
+|--------|------------|---------------|
+| CML 状態監視（デフォルト） | `--poll-interval 3` | CML リンク/ノード状態（CMLStateWatcher） |
+| ログ直接監視 | `--log-poll-interval 10` | 装置の `show logging`（DeviceLogPoller） |
+
 ### スクリプトモード（CML 不要 / オフライン確認用）
 ```bash
 # API キー不要。セリフが全て事前定義されたデモ。動作確認のみに使う。
@@ -299,11 +325,16 @@ uv run agentic-ni-lab status --title agentic-ni-demo-large
 uv run agentic-ni-lab delete --title agentic-ni-demo-large
 
 # ── 本番デモ（CML リアルタイム連携 — 推奨） ──────────────────────────
-# 監視起動（ターミナル1: 起動したまま維持）
-# CML 経由で実際に show コマンドを実行する（--mock-tools 不要）
+# 監視起動: CML 状態監視モード（デフォルト、ターミナル1: 起動したまま維持）
 uv run agentic-ni-watch \
     --lab-id <lab_id> \
     --topology configs/demo-large/topology.yaml
+
+# 監視起動: ログ直接監視モード（CMLStateWatcher 無効、各エージェントが show logging をポーリング）
+uv run agentic-ni-watch \
+    --lab-id <lab_id> \
+    --topology configs/demo-large/topology.yaml \
+    --log-poll-interval 10
 
 # シナリオ D: コアリンク停止（ターミナル2）
 uv run agentic-ni-lab fault --title agentic-ni-demo-large --link l0 --down

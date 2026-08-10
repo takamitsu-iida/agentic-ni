@@ -448,6 +448,22 @@ class CMLDeviceToolkit:
             description=f"[{self._device_name}] ルーティングテーブル（show ip route）を取得して返す。",
         )
 
+    def make_log_poller(
+        self,
+        agent: Any,
+        poll_interval: float = 10.0,
+        command: str = "show logging",
+    ) -> "DeviceLogPoller":
+        """このツールキットが管理する装置のログポーラーを生成して返す。"""
+        from agentic_ni.distributed.log_poller import DeviceLogPoller
+        return DeviceLogPoller(
+            device_name=self._device_name,
+            run_command=self._run,
+            agent=agent,
+            poll_interval=poll_interval,
+            command=command,
+        )
+
     def _make_apply_config(self) -> StructuredTool:
         device_name = self._device_name
         human_queue = self._human_queue

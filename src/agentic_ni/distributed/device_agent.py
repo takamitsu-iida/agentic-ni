@@ -25,6 +25,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agentic_ni.distributed.bus import MessageBus
 from agentic_ni.distributed.dedup import SyslogDeduplicator
+from agentic_ni.distributed.log_poller import DeviceLogPoller
 from agentic_ni.distributed.memory import DeviceMemory
 from agentic_ni.distributed.message import AgentMessage
 from agentic_ni.distributed.prompts import build_device_prompt
@@ -129,6 +130,7 @@ class DeviceAgent:
         llm: BaseChatModel | None = None,
         tools: list[Any] | None = None,
         human_queue: asyncio.Queue | None = None,
+        log_poller: DeviceLogPoller | None = None,
     ) -> None:
         self.device_name = device_name
         self.agent_id = agent_id
@@ -139,6 +141,7 @@ class DeviceAgent:
         self._management_ip = management_ip
         self._tools = tools or []
         self._human_queue = human_queue
+        self._log_poller = log_poller
 
         # LLM は遅延初期化（テスト時は外部から注入）
         self._llm: BaseChatModel | None = llm
@@ -164,6 +167,8 @@ class DeviceAgent:
         await self._bus.subscribe("network/agents/chat", self._on_bus_message)
         self._running = True
         self._task = asyncio.create_task(self._run_loop(), name=f"agent-{self.agent_id}")
+        if self._log_poller:
+            await self._log_poller.start()
         logger.info("[%s] 起動しました。", self.agent_id)
 
     async def stop(self) -> None:
@@ -175,6 +180,8 @@ class DeviceAgent:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._log_poller:
+            await self._log_poller.stop()
         await self._bus.unsubscribe(
             f"network/agents/{self.agent_id}/direct", self._on_bus_message
         )
