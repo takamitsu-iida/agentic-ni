@@ -467,6 +467,7 @@ nodes:
         - apt-get update -qq
         - apt-get install -y -qq python3-pip git
         - pip3 install uv --quiet
+        - git clone https://github.com/takamitsu-iida/agentic-ni.git /home/cisco/agentic-ni
     interfaces:
       - id: "i0"
         label: "ens2"
