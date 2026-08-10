@@ -3,6 +3,8 @@
 
 # 生成したコンフィグは追跡不要
 configs/
+!trouble_shooting/configs/
+!trouble_shooting/configs/**
 
 # レポートも追跡不要
 reports/

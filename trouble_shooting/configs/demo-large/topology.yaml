@@ -1,0 +1,309 @@
+lab:
+  title: agentic-ni-large-demo
+  description: >
+    10台ルータ 3階層OSPF構成 — コアレイヤ(R1,R2) + ディストリビューション(R3,R4,R5)
+    + アクセス(R6-R10)。CML上での自律分散AIエージェントデモ用。
+  version: "0.1.0"
+
+#
+# ネットワーク構成図
+#
+#   Core:           [R1]────────[R2]
+#                  /  |  \  /  |  \
+#   Distribution: [R3] [R4] [R5]
+#                 / \   / \   \
+#   Access:     [R6][R7] [R8][R9] [R10]
+#
+# IPアドレス体系 (/30 P2Pリンク)
+#   R1-R2 : 10.0.12.0/30   R1=.1, R2=.2
+#   R1-R3 : 10.0.13.0/30   R1=.1, R3=.2
+#   R1-R4 : 10.0.14.0/30   R1=.1, R4=.2
+#   R1-R5 : 10.0.15.0/30   R1=.1, R5=.2
+#   R2-R3 : 10.0.23.0/30   R2=.1, R3=.2
+#   R2-R4 : 10.0.24.0/30   R2=.1, R4=.2
+#   R2-R5 : 10.0.25.0/30   R2=.1, R5=.2
+#   R3-R6 : 10.0.36.0/30   R3=.1, R6=.2
+#   R3-R7 : 10.0.37.0/30   R3=.1, R7=.2
+#   R4-R8 : 10.0.48.0/30   R4=.1, R8=.2
+#   R4-R9 : 10.0.49.0/30   R4=.1, R9=.2
+#   R5-R10: 10.0.50.0/30   R5=.1, R10=.2
+#
+# ルータID (Loopback0)
+#   R1:1.1.1.1  R2:2.2.2.2  R3:3.3.3.3  R4:4.4.4.4  R5:5.5.5.5
+#   R6:6.6.6.6  R7:7.7.7.7  R8:8.8.8.8  R9:9.9.9.9  R10:10.10.10.10
+#
+# 障害シナリオ
+#   D (core-link-down) : リンク l0 (R1-R2 Gi0/0) を CML で停止
+#   E (node-failure)   : ノード n3 (R4) を CML で停止
+#
+
+nodes:
+  # ── Core layer ───────────────────────────────────────────────
+  - id: "n0"
+    label: "R1"
+    node_definition: "iosv"
+    x: -150
+    y: -200
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "GigabitEthernet0/2"
+        slot: 2
+        type: physical
+      - id: "i3"
+        label: "GigabitEthernet0/3"
+        slot: 3
+        type: physical
+
+  - id: "n1"
+    label: "R2"
+    node_definition: "iosv"
+    x: 150
+    y: -200
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "GigabitEthernet0/2"
+        slot: 2
+        type: physical
+      - id: "i3"
+        label: "GigabitEthernet0/3"
+        slot: 3
+        type: physical
+
+  # ── Distribution layer ────────────────────────────────────────
+  - id: "n2"
+    label: "R3"
+    node_definition: "iosv"
+    x: -300
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "GigabitEthernet0/2"
+        slot: 2
+        type: physical
+      - id: "i3"
+        label: "GigabitEthernet0/3"
+        slot: 3
+        type: physical
+
+  - id: "n3"
+    label: "R4"
+    node_definition: "iosv"
+    x: 0
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "GigabitEthernet0/2"
+        slot: 2
+        type: physical
+      - id: "i3"
+        label: "GigabitEthernet0/3"
+        slot: 3
+        type: physical
+
+  - id: "n4"
+    label: "R5"
+    node_definition: "iosv"
+    x: 300
+    y: 0
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "GigabitEthernet0/2"
+        slot: 2
+        type: physical
+
+  # ── Access layer ──────────────────────────────────────────────
+  - id: "n5"
+    label: "R6"
+    node_definition: "iosv"
+    x: -425
+    y: 200
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+
+  - id: "n6"
+    label: "R7"
+    node_definition: "iosv"
+    x: -200
+    y: 200
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+
+  - id: "n7"
+    label: "R8"
+    node_definition: "iosv"
+    x: -75
+    y: 200
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+
+  - id: "n8"
+    label: "R9"
+    node_definition: "iosv"
+    x: 125
+    y: 200
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+
+  - id: "n9"
+    label: "R10"
+    node_definition: "iosv"
+    x: 350
+    y: 200
+    configuration: ""
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+
+links:
+  # Core-Core (シナリオD で停止するリンク)
+  - id: "l0"
+    n1: "n0"
+    i1: "i0"
+    n2: "n1"
+    i2: "i0"
+    label: "l0"   # R1 Gi0/0 ↔ R2 Gi0/0 (10.0.12.0/30)
+
+  # Core-Distribution (R1 側)
+  - id: "l1"
+    n1: "n0"
+    i1: "i1"
+    n2: "n2"
+    i2: "i0"
+    label: "l1"   # R1 Gi0/1 ↔ R3 Gi0/0 (10.0.13.0/30)
+
+  - id: "l2"
+    n1: "n0"
+    i1: "i2"
+    n2: "n3"
+    i2: "i0"
+    label: "l2"   # R1 Gi0/2 ↔ R4 Gi0/0 (10.0.14.0/30)
+
+  - id: "l3"
+    n1: "n0"
+    i1: "i3"
+    n2: "n4"
+    i2: "i0"
+    label: "l3"   # R1 Gi0/3 ↔ R5 Gi0/0 (10.0.15.0/30)
+
+  # Core-Distribution (R2 側)
+  - id: "l4"
+    n1: "n1"
+    i1: "i1"
+    n2: "n2"
+    i2: "i1"
+    label: "l4"   # R2 Gi0/1 ↔ R3 Gi0/1 (10.0.23.0/30)
+
+  - id: "l5"
+    n1: "n1"
+    i1: "i2"
+    n2: "n3"
+    i2: "i1"
+    label: "l5"   # R2 Gi0/2 ↔ R4 Gi0/1 (10.0.24.0/30)
+
+  - id: "l6"
+    n1: "n1"
+    i1: "i3"
+    n2: "n4"
+    i2: "i1"
+    label: "l6"   # R2 Gi0/3 ↔ R5 Gi0/1 (10.0.25.0/30)
+
+  # Distribution-Access (R3 配下)
+  - id: "l7"
+    n1: "n2"
+    i1: "i2"
+    n2: "n5"
+    i2: "i0"
+    label: "l7"   # R3 Gi0/2 ↔ R6 Gi0/0 (10.0.36.0/30)
+
+  - id: "l8"
+    n1: "n2"
+    i1: "i3"
+    n2: "n6"
+    i2: "i0"
+    label: "l8"   # R3 Gi0/3 ↔ R7 Gi0/0 (10.0.37.0/30)
+
+  # Distribution-Access (R4 配下 — シナリオE でノード停止するとl9,l10も断絶)
+  - id: "l9"
+    n1: "n3"
+    i1: "i2"
+    n2: "n7"
+    i2: "i0"
+    label: "l9"   # R4 Gi0/2 ↔ R8 Gi0/0 (10.0.48.0/30)
+
+  - id: "l10"
+    n1: "n3"
+    i1: "i3"
+    n2: "n8"
+    i2: "i0"
+    label: "l10"  # R4 Gi0/3 ↔ R9 Gi0/0 (10.0.49.0/30)
+
+  # Distribution-Access (R5 配下)
+  - id: "l11"
+    n1: "n4"
+    i1: "i2"
+    n2: "n9"
+    i2: "i0"
+    label: "l11"  # R5 Gi0/2 ↔ R10 Gi0/0 (10.0.50.0/30)
