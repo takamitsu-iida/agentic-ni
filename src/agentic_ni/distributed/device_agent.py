@@ -279,8 +279,8 @@ class DeviceAgent:
                     logger.debug("[%s] ツール %s 実行完了", self.agent_id, tool_name)
                     return str(result)
                 except Exception as exc:
-                    error_msg = f"ツール {tool_name!r} 実行エラー: {exc}"
-                    logger.warning("[%s] %s", self.agent_id, error_msg)
+                    error_msg = f"ツール {tool_name!r} 実行エラー: {type(exc).__name__}: {exc}"
+                    logger.warning("[%s] %s", self.agent_id, error_msg, exc_info=True)
                     return error_msg
 
         available = [t.name for t in self._tools]

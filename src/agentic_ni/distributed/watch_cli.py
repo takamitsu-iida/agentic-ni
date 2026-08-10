@@ -29,7 +29,7 @@ from agentic_ni.distributed.cml_watcher import CMLStateWatcher
 from agentic_ni.distributed.device_tools import CMLDeviceToolkit, MockDeviceToolkit
 from agentic_ni.distributed.message import AgentMessage
 from agentic_ni.distributed.orchestrator import AgentOrchestrator
-from agentic_ni.logger import get_logger
+from agentic_ni.logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
@@ -148,7 +148,16 @@ def main() -> None:
         "--bus", default="memory", choices=["memory", "mqtt", "nats"],
         help="メッセージバスのバックエンド（デフォルト: memory）",
     )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="DEBUG レベルのログ + スタックトレースを表示する",
+    )
+    parser.add_argument(
+        "--log-file", metavar="FILE",
+        help="ログを指定ファイルにも保存する",
+    )
     args = parser.parse_args()
+    configure_logging(verbose=args.verbose, log_file=args.log_file)
     asyncio.run(_async_main(args))
 
 

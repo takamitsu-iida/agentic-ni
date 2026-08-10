@@ -31,6 +31,10 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from agentic_ni.logger import get_logger
+
+logger = get_logger(__name__)
+
 # デフォルトは Read-Only（明示的に "false" にしない限り有効）
 _DEFAULT_READONLY = os.getenv("DEVICE_AGENT_READONLY", "true").lower() != "false"
 
@@ -359,7 +363,15 @@ class CMLDeviceToolkit:
 
     def _run(self, command: str) -> str:
         node = self._get_node()
-        return node.run_pyats_command(command)
+        try:
+            return node.run_pyats_command(command)
+        except Exception as exc:
+            logger.error(
+                "[%s] run_pyats_command(%r) 失敗: %s: %s",
+                self._device_name, command, type(exc).__name__, exc,
+                exc_info=True,
+            )
+            raise
 
     def get_tools(self) -> list[StructuredTool]:
         tools: list[StructuredTool] = [
