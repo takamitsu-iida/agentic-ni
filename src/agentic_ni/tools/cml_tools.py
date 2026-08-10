@@ -414,16 +414,23 @@ def set_link_state(lab_id: str, link_id: str, up: bool) -> None:
     client = _get_client()
     lab = _get_lab(client, lab_id)
 
+    # join_existing_lab 後は sync_topology_if_outdated が "最近同期済み" とみなして
+    # スキップするため _links が空になる。lab.sync() で強制的にトポロジーを取得する。
+    lab.sync(topology_only=True)
+
     # まず CML 内部 ID で検索し、見つからなければラベルで検索する
-    # (CML はインポート時にリンク ID を再採番するため、YAML の id と一致しない場合がある)
+    from virl2_client.exceptions import LinkNotFound as _LinkNotFound
     try:
-        from virl2_client.exceptions import LinkNotFound as _LinkNotFound
         link = lab.get_link_by_id(link_id)
     except _LinkNotFound:
         link = next((lnk for lnk in lab.links() if lnk.label == link_id), None)
 
     if link is None:
-        raise KeyError(f"リンクが見つかりません: link_id={link_id!r}, lab_id={lab_id!r}")
+        available = [(lnk.id, lnk.label) for lnk in lab.links()]
+        raise KeyError(
+            f"リンクが見つかりません: link_id={link_id!r}, lab_id={lab_id!r}\n"
+            f"  利用可能なリンク: {available}"
+        )
 
     if up:
         link.interface_a.bring_up()
