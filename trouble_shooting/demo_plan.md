@@ -24,29 +24,12 @@
 
 | シナリオ | ノード数 | 障害種別 | CML 操作 | コマンド |
 |----------|---------|---------|---------|----------|
-| A: OSPF タイマーミスマッチ | 2台 | 設定ミス | なし | `--scenario ospf-timer` |
-| B: 物理リンク断 | 2台 | リンク停止 | なし | `--scenario link-down` |
-| C: 二重リンク断 + 攻撃エージェント | 3台 | 二重リンク断 | なし | `--scenario attack-dual` |
 | **D: CML コアリンク停止** | **10台** | **CML リンク停止** | `l0 state=stopped` | `--scenario core-link-down` |
 | **E: CML ノード停止** | **10台** | **CML ノード停止** | `n3 state=stopped` | `--scenario node-failure` |
 
 ---
 
 ## 3. シナリオ詳細
-
-### シナリオ A: OSPF Hello タイマーミスマッチ（2台）
-
-**ストーリーライン**
-1. 夜間バッチ後に OSPF ネイバーが消失（syslog が飛ぶ）
-2. Agent-R1 が自装置を調査 → 物理リンクは UP、タイマー 10 秒
-3. Agent-R1 が Agent-R2 に問い合わせ
-4. Agent-R2 が調査 → タイマー 30 秒（**ここが犯人**）
-5. Agent-R1 がクロスチェック → ミスマッチを自律検出
-6. 管理者に `ip ospf hello-interval 10` コマンドを提案
-
-**所要時間**: 約 **1.6 秒**（手動診断の平均 30〜120 分との対比）
-
----
 
 ### シナリオ D: CML コアリンク停止 — 10台構成（**新規推奨**）
 
@@ -151,22 +134,6 @@ agentic-ni-lab fault --lab-id <lab_id> --link l0
 ```bash
 # CML で n3 (R4) ノードを停止した後に実行
 agentic-ni-demo --scenario node-failure --scripted
-```
-
-### シナリオ A（2台 — スクリプトモード）
-```bash
-agentic-ni-demo --scenario ospf-timer --scripted
-```
-
-### シナリオ A（リアル LLM モード）
-```bash
-# .env に LLM_PROVIDER と API キーを設定済みの場合
-agentic-ni-demo --scenario ospf-timer
-```
-
-### シナリオ B（2台 — 物理リンク断）
-```bash
-agentic-ni-demo --scenario link-down --scripted
 ```
 
 ### 終了後のレポート確認
@@ -311,16 +278,6 @@ agentic-ni-lab fault --lab-id <lab_id> --link l0          # 復旧
 # シナリオ E: ディストリビューションルータ停止（CML で n3 を停止後に実行）
 agentic-ni-demo --scenario node-failure --scripted
 
-# ── 2〜3台構成（CML 不要） ────────────────────────────────────────────
-# シナリオ A: OSPF タイマーミスマッチ
-agentic-ni-demo --scenario ospf-timer --scripted
-
-# シナリオ B: 物理リンク断
-agentic-ni-demo --scenario link-down --scripted
-
-# シナリオ C: 攻撃エージェント vs 防御エージェント
-agentic-ni-demo --scenario attack-dual --scripted
-
 # ── 共通 ──────────────────────────────────────────────────────────────
 # リアル LLM モード（.env 設定済みの場合）
 agentic-ni-demo --scenario core-link-down
@@ -336,7 +293,7 @@ cat $(ls -t reports/demo*.md | head -1)
 | リスク | バックアップ |
 |--------|------------|
 | API キーが使えない | `--scripted` モードに切り替え（事前に動作確認済み） |
-| CML が起動しない | シナリオ A/B（CML 不要）に切り替え |
+| CML が起動しない | シナリオ D/E のどちらかに絞って実施 |
 | 端末出力が見づらい | ターミナルのフォントを 14pt 以上に設定、カラーテーマを Dark に |
 | 実行エラー | `python -m agentic_ni.distributed.demo_runner --scenario core-link-down --scripted` を直接実行 |
 | 時間超過 | シナリオ D のみ実施（2分以内）、シナリオ E は質疑応答で紹介 |

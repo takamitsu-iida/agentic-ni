@@ -413,7 +413,15 @@ def set_link_state(lab_id: str, link_id: str, up: bool) -> None:
     """
     client = _get_client()
     lab = _get_lab(client, lab_id)
-    link = lab.get_link_by_id(link_id)
+
+    # まず CML 内部 ID で検索し、見つからなければラベルで検索する
+    # (CML はインポート時にリンク ID を再採番するため、YAML の id と一致しない場合がある)
+    try:
+        from virl2_client.exceptions import LinkNotFound as _LinkNotFound
+        link = lab.get_link_by_id(link_id)
+    except _LinkNotFound:
+        link = next((lnk for lnk in lab.links() if lnk.label == link_id), None)
+
     if link is None:
         raise KeyError(f"リンクが見つかりません: link_id={link_id!r}, lab_id={lab_id!r}")
 
