@@ -190,9 +190,33 @@ def _resolve_yaml_link(lab_id: str, yaml_link_id: str) -> tuple[str, str] | None
     return None
 
 
+def _resolve_lab_id(args: argparse.Namespace) -> str | None:
+    """--lab-id または --title からラボIDを解決する。"""
+    if getattr(args, "lab_id", None):
+        return args.lab_id
+    title = getattr(args, "title", None)
+    if not title:
+        return None
+    from agentic_ni.tools import cml_tools
+    client = cml_tools._get_client()
+    matched = [lab for lab in client.all_labs() if lab.title == title]
+    if not matched:
+        print(f"[ERROR] タイトル '{title}' のラボが見つかりません。", file=sys.stderr)
+        return None
+    if len(matched) > 1:
+        print(f"[WARN] タイトル '{title}' のラボが複数存在します。最初のものを使用します。", file=sys.stderr)
+    return matched[0].id
+
+
 def _cmd_fault(args: argparse.Namespace) -> int:
     """fault サブコマンド: リンクまたはノードの状態を変更する（障害注入）。"""
     from agentic_ni.tools import cml_tools
+
+    lab_id = _resolve_lab_id(args)
+    if not lab_id:
+        print("[ERROR] --lab-id または --title を指定してください。", file=sys.stderr)
+        return 1
+    args.lab_id = lab_id
 
     if args.link:
         up = not args.down
@@ -222,6 +246,12 @@ def _cmd_fault(args: argparse.Namespace) -> int:
 def _cmd_status(args: argparse.Namespace) -> int:
     """status サブコマンド: ラボのノード・リンク状態を表示する。"""
     from agentic_ni.tools import cml_tools
+
+    lab_id = _resolve_lab_id(args)
+    if not lab_id:
+        print("[ERROR] --lab-id または --title を指定してください。", file=sys.stderr)
+        return 1
+    args.lab_id = lab_id
 
     nodes = cml_tools.get_lab_nodes(args.lab_id)
     if not nodes:
@@ -268,13 +298,17 @@ def main() -> None:
 
     # fault
     p_fault = sub.add_parser("fault", help="リンク障害を注入または復旧する")
-    p_fault.add_argument("--lab-id", required=True, help="対象ラボID")
+    p_fault_id = p_fault.add_mutually_exclusive_group(required=True)
+    p_fault_id.add_argument("--lab-id", default=None, help="対象ラボID")
+    p_fault_id.add_argument("--title", default=None, help="対象ラボ名")
     p_fault.add_argument("--link", default=None, help="対象リンクID（例: l0）")
     p_fault.add_argument("--down", action="store_true", help="リンクを停止する（省略時は復旧）")
 
     # status
     p_status = sub.add_parser("status", help="ラボのノード状態を確認する")
-    p_status.add_argument("--lab-id", required=True, help="対象ラボID")
+    p_status_id = p_status.add_mutually_exclusive_group(required=True)
+    p_status_id.add_argument("--lab-id", default=None, help="対象ラボID")
+    p_status_id.add_argument("--title", default=None, help="対象ラボ名")
 
     args = parser.parse_args()
 

@@ -5,14 +5,14 @@ syslog イベントを注入し、エージェントが自律的に診断を開�
 
 使用方法::
 
-    # show コマンドはモック、LLM は実際に呼ぶ（推奨デモ設定）
+    # CML 経由で実機に show コマンドを実行する（推奨）
+    agentic-ni-watch --lab-id <lab_id> \\
+        --topology configs/demo-large/topology.yaml
+
+    # show コマンドはモック、LLM は実際に呼ぶ（CML 接続不要のオフライン確認用）
     agentic-ni-watch --lab-id <lab_id> \\
         --topology configs/demo-large/topology.yaml \\
         --mock-tools
-
-    # pyATS 経由で実機から show コマンドを取得する場合
-    agentic-ni-watch --lab-id <lab_id> \\
-        --topology configs/demo-large/topology.yaml
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from pathlib import Path
 
 from agentic_ni.distributed.bus import create_bus
 from agentic_ni.distributed.cml_watcher import CMLStateWatcher
-from agentic_ni.distributed.device_tools import MockDeviceToolkit
+from agentic_ni.distributed.device_tools import CMLDeviceToolkit, MockDeviceToolkit
 from agentic_ni.distributed.message import AgentMessage
 from agentic_ni.distributed.orchestrator import AgentOrchestrator
 from agentic_ni.logger import get_logger
@@ -115,7 +115,11 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "例:\n"
-            "  # show コマンドはモック、LLM は実際に呼ぶ（推奨）\n"
+            "  # CML 経由で実機に show コマンドを実行する（推奨）\n"
+            "  agentic-ni-watch --lab-id abc123 \\\n"
+            "      --topology configs/demo-large/topology.yaml\n"
+            "\n"
+            "  # show コマンドをモックにする（オフライン確認用）\n"
             "  agentic-ni-watch --lab-id abc123 \\\n"
             "      --topology configs/demo-large/topology.yaml --mock-tools\n"
             "\n"
@@ -138,7 +142,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--mock-tools", action="store_true",
-        help="show コマンドをモックにする（pyATS 不要）。LLM は実際に呼ばれる",
+        help="show コマンドをモックにする（CML接続・pyATS不要）。オフライン確認用",
     )
     parser.add_argument(
         "--bus", default="memory", choices=["memory", "mqtt", "nats"],
@@ -171,7 +175,9 @@ async def _async_main(args: argparse.Namespace) -> None:
     if args.mock_tools:
         toolkit_factory = lambda name: MockDeviceToolkit(name)
     else:
-        toolkit_factory = None  # DeviceToolkit は pyATS testbed が必要なため省略
+        # CML 組み込み pyATS 経由で実機にコマンドを実行する（testbed YAML 不要）
+        lab_id = args.lab_id
+        toolkit_factory = lambda name: CMLDeviceToolkit(name, lab_id=lab_id)
 
     # エージェント起動
     orchestrator = AgentOrchestrator(bus=bus, toolkit_factory=toolkit_factory)

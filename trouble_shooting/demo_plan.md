@@ -119,16 +119,17 @@ uv run agentic-ni-lab deploy --config demo-large
 ```bash
 uv run agentic-ni-watch \
     --lab-id <lab_id> \
-    --topology configs/demo-large/topology.yaml \
-    --mock-tools
+    --topology configs/demo-large/topology.yaml
 # → エージェント 10 台が起動し、CML をポーリング開始
 # → 「👁 CML 監視中」と表示されたら準備完了
+# ※ CML 経由で実際に show コマンドを実行します（pyATS testbed 不要）
 ```
 
 **③ CML でコアリンク l0（R1-R2 間）を停止する**
 ```bash
 # 別ターミナルで実行、または CML GUI で操作
-uv run agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
+# --title でラボ名指定（--lab-id <lab_id> でも可）
+uv run agentic-ni-lab fault --title agentic-ni-demo-large --link l0 --down
 ```
 → 3秒以内に監視ターミナルに以下が流れ始める:
 ```
@@ -142,14 +143,14 @@ uv run agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
 
 **④ 障害復旧（デモ後）**
 ```bash
-uv run agentic-ni-lab fault --lab-id <lab_id> --link l0
+uv run agentic-ni-lab fault --title agentic-ni-demo-large --link l0
 ```
 
 ### シナリオ E（10台 — CML ノード停止）
 
 **② と同じ `agentic-ni-watch` を起動したまま、ノードを停止する:**
 ```bash
-uv run agentic-ni-lab fault --lab-id <lab_id> --node n3 --down
+uv run agentic-ni-lab fault --title agentic-ni-demo-large --node n3 --down
 # → R4 に隣接する R1/R2/R8/R9 へ syslog が自動注入される
 ```
 
@@ -286,26 +287,26 @@ uv run agentic-ni-lab deploy --config demo-large
 # CML 上のラボ一覧確認
 uv run agentic-ni-lab list
 
-# ノード状態確認
-uv run agentic-ni-lab status --lab-id <lab_id>
+# ノード状態確認（--title でラボ名指定可、--lab-id でも可）
+uv run agentic-ni-lab status --title agentic-ni-demo-large
 
 # ラボ削除
-uv run agentic-ni-lab delete --lab-id <lab_id>
+uv run agentic-ni-lab delete --title agentic-ni-demo-large
 
 # ── 本番デモ（CML リアルタイム連携 — 推奨） ──────────────────────────
 # 監視起動（ターミナル1: 起動したまま維持）
+# CML 経由で実際に show コマンドを実行する（--mock-tools 不要）
 uv run agentic-ni-watch \
     --lab-id <lab_id> \
-    --topology configs/demo-large/topology.yaml \
-    --mock-tools
+    --topology configs/demo-large/topology.yaml
 
 # シナリオ D: コアリンク停止（ターミナル2）
-uv run agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
-uv run agentic-ni-lab fault --lab-id <lab_id> --link l0          # 復旧
+uv run agentic-ni-lab fault --title agentic-ni-demo-large --link l0 --down
+uv run agentic-ni-lab fault --title agentic-ni-demo-large --link l0          # 復旧
 
 # シナリオ E: ディストリビューションルータ停止（ターミナル2）
-uv run agentic-ni-lab fault --lab-id <lab_id> --node n3 --down
-uv run agentic-ni-lab fault --lab-id <lab_id> --node n3          # 復旧
+uv run agentic-ni-lab fault --title agentic-ni-demo-large --node n3 --down
+uv run agentic-ni-lab fault --title agentic-ni-demo-large --node n3          # 復旧
 
 # ── スクリプトモード（CML 不要 / オフライン確認用） ───────────────────
 # シナリオ D（セリフ事前定義 / 動作確認のみ）

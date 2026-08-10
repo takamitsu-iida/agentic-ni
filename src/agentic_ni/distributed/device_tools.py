@@ -322,6 +322,136 @@ class MockDeviceToolkit:
 
 
 # ---------------------------------------------------------------------------
+# CMLDeviceToolkit — CML 組み込み pyATS 経由（testbed YAML 不要）
+# ---------------------------------------------------------------------------
+
+class CMLDeviceToolkit:
+    """virl2_client の run_pyats_command を使って CML ノードに直接コマンドを実行するツールキット。
+
+    pyATS testbed YAML の作成が不要。CML_URL / CML_USERNAME / CML_PASSWORD
+    の環境変数だけで動作する。
+    """
+
+    def __init__(
+        self,
+        device_name: str,
+        lab_id: str,
+        human_queue: asyncio.Queue | None = None,
+        readonly: bool = _DEFAULT_READONLY,
+    ) -> None:
+        self._device_name = device_name
+        self._lab_id = lab_id
+        self._human_queue = human_queue
+        self._readonly = readonly
+
+    def _get_node(self):
+        """CML から対応ノードオブジェクトを取得する（同期・呼び出し毎に接続）。"""
+        from agentic_ni.tools.cml_tools import _get_client, _get_lab
+        client = _get_client()
+        lab = _get_lab(client, self._lab_id)
+        lab.sync_states()
+        for node in lab.nodes():
+            if node.label == self._device_name:
+                return node
+        raise RuntimeError(
+            f"[{self._device_name}] ラボ {self._lab_id} にノードが見つかりません。"
+        )
+
+    def _run(self, command: str) -> str:
+        node = self._get_node()
+        return node.run_pyats_command(command)
+
+    def get_tools(self) -> list[StructuredTool]:
+        tools: list[StructuredTool] = [
+            self._make_run_show(),
+            self._make_get_running_config(),
+            self._make_get_interface_status(),
+            self._make_get_routing_table(),
+        ]
+        if not self._readonly:
+            tools.append(self._make_apply_config())
+        return tools
+
+    def _make_run_show(self) -> StructuredTool:
+        tk = self
+
+        def run_show(command: str) -> str:
+            return tk._run(command)
+
+        return StructuredTool.from_function(
+            func=run_show,
+            name="run_show",
+            description=f"[{self._device_name}] 任意の show コマンドを実行してテキスト出力を返す。",
+            args_schema=_RunShowInput,
+        )
+
+    def _make_get_running_config(self) -> StructuredTool:
+        tk = self
+
+        def get_running_config() -> str:
+            return tk._run("show running-config")
+
+        return StructuredTool.from_function(
+            func=get_running_config,
+            name="get_running_config",
+            description=f"[{self._device_name}] running-config をテキストで取得して返す。",
+        )
+
+    def _make_get_interface_status(self) -> StructuredTool:
+        tk = self
+
+        def get_interface_status() -> str:
+            return tk._run("show interfaces")
+
+        return StructuredTool.from_function(
+            func=get_interface_status,
+            name="get_interface_status",
+            description=f"[{self._device_name}] 全インターフェースの状態一覧を取得して返す。",
+        )
+
+    def _make_get_routing_table(self) -> StructuredTool:
+        tk = self
+
+        def get_routing_table() -> str:
+            return tk._run("show ip route")
+
+        return StructuredTool.from_function(
+            func=get_routing_table,
+            name="get_routing_table",
+            description=f"[{self._device_name}] ルーティングテーブル（show ip route）を取得して返す。",
+        )
+
+    def _make_apply_config(self) -> StructuredTool:
+        device_name = self._device_name
+        human_queue = self._human_queue
+
+        def apply_config(commands: str) -> str:
+            if human_queue is None:
+                raise PermissionError(
+                    f"[{device_name}] human_queue が未設定のため設定変更できません。"
+                )
+            human_queue.put_nowait({
+                "type": "config_change_request",
+                "device": device_name,
+                "commands": commands,
+            })
+            return (
+                f"[{device_name}] 設定変更リクエストを承認キューに積みました。"
+                f"管理者の承認後に適用されます。\n投入コマンド:\n{commands}"
+            )
+
+        return StructuredTool.from_function(
+            func=apply_config,
+            name="apply_config",
+            description=(
+                f"[{device_name}] 設定変更を Human 承認キューに積む。"
+                "実際の変更は管理者の承認後に実施される。"
+            ),
+            args_schema=_ApplyConfigInput,
+        )
+
+
+# ---------------------------------------------------------------------------
 # ファクトリー
 # ---------------------------------------------------------------------------
 
