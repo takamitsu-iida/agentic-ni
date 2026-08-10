@@ -107,33 +107,56 @@ CML_PASSWORD=<PASS>
 CML_VERIFY_SSL=false   # 自己署名証明書の場合
 ```
 
-### シナリオ D（10台 — CML コアリンク停止）
+### シナリオ D（10台 — CML コアリンク停止）— **本番推奨**
 
 **① ラボを作成・起動する（初回のみ）**
 ```bash
-agentic-ni-lab deploy --config demo-large
+uv run agentic-ni-lab deploy --config demo-large
 # → Lab ID が表示される（例: lab_id=abc123...）
 ```
 
-**② コアリンク l0（R1-R2 間）を停止して障害を注入する**
+**② 監視を開始する（別ターミナルで起動したまま維持）**
 ```bash
-agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
+uv run agentic-ni-watch \
+    --lab-id <lab_id> \
+    --topology configs/demo-large/topology.yaml \
+    --mock-tools
+# → エージェント 10 台が起動し、CML をポーリング開始
+# → 「👁 CML 監視中」と表示されたら準備完了
 ```
 
-**③ AI デモを実行する**
+**③ CML でコアリンク l0（R1-R2 間）を停止する**
 ```bash
-agentic-ni-demo --scenario core-link-down --scripted
+# 別ターミナルで実行、または CML GUI で操作
+uv run agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
+```
+→ 3秒以内に監視ターミナルに以下が流れ始める:
+```
+  🔔 CML 検知 [R1] %LINK-3-UPDOWN: Interface GigabitEthernet0/0 ...
+  🔔 CML 検知 [R2] %LINK-3-UPDOWN: Interface GigabitEthernet0/0 ...
+   0.0s  Agent-R1 → Agent-R2  │ Gi0/0 が DOWN しています...
+   1.2s  Agent-R2 → Agent-R1  │ R2 でも Gi0/0 DOWN を確認...
+   1.5s  Agent-R1 📡 ALL       │ 【診断確定】コアリンク断...
+   1.5s  Agent-R1 🚨 HUMAN     │ 根本原因: CML リンク l0 の停止...
 ```
 
 **④ 障害復旧（デモ後）**
 ```bash
-agentic-ni-lab fault --lab-id <lab_id> --link l0
+uv run agentic-ni-lab fault --lab-id <lab_id> --link l0
 ```
 
 ### シナリオ E（10台 — CML ノード停止）
+
+**② と同じ `agentic-ni-watch` を起動したまま、ノードを停止する:**
 ```bash
-# CML で n3 (R4) ノードを停止した後に実行
-agentic-ni-demo --scenario node-failure --scripted
+uv run agentic-ni-lab fault --lab-id <lab_id> --node n3 --down
+# → R4 に隣接する R1/R2/R8/R9 へ syslog が自動注入される
+```
+
+### スクリプトモード（CML 不要 / オフライン確認用）
+```bash
+# API キー不要。セリフが全て事前定義されたデモ。動作確認のみに使う。
+uv run agentic-ni-demo --scenario core-link-down --scripted
 ```
 
 ### 終了後のレポート確認
@@ -258,30 +281,40 @@ agentic-ni-demo --scenario node-failure --scripted
 ```bash
 # ── CML ラボ管理 ──────────────────────────────────────────────────────
 # ラボ作成・起動（demo-large = 10台構成）
-agentic-ni-lab deploy --config demo-large
+uv run agentic-ni-lab deploy --config demo-large
 
 # CML 上のラボ一覧確認
-agentic-ni-lab list
+uv run agentic-ni-lab list
 
 # ノード状態確認
-agentic-ni-lab status --lab-id <lab_id>
+uv run agentic-ni-lab status --lab-id <lab_id>
 
 # ラボ削除
-agentic-ni-lab delete --lab-id <lab_id>
+uv run agentic-ni-lab delete --lab-id <lab_id>
 
-# ── 10台構成（CML 環境 — 推奨） ───────────────────────────────────────
-# シナリオ D: コアリンク停止
-agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
-agentic-ni-demo --scenario core-link-down --scripted
-agentic-ni-lab fault --lab-id <lab_id> --link l0          # 復旧
+# ── 本番デモ（CML リアルタイム連携 — 推奨） ──────────────────────────
+# 監視起動（ターミナル1: 起動したまま維持）
+uv run agentic-ni-watch \
+    --lab-id <lab_id> \
+    --topology configs/demo-large/topology.yaml \
+    --mock-tools
 
-# シナリオ E: ディストリビューションルータ停止（CML で n3 を停止後に実行）
-agentic-ni-demo --scenario node-failure --scripted
+# シナリオ D: コアリンク停止（ターミナル2）
+uv run agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
+uv run agentic-ni-lab fault --lab-id <lab_id> --link l0          # 復旧
+
+# シナリオ E: ディストリビューションルータ停止（ターミナル2）
+uv run agentic-ni-lab fault --lab-id <lab_id> --node n3 --down
+uv run agentic-ni-lab fault --lab-id <lab_id> --node n3          # 復旧
+
+# ── スクリプトモード（CML 不要 / オフライン確認用） ───────────────────
+# シナリオ D（セリフ事前定義 / 動作確認のみ）
+uv run agentic-ni-demo --scenario core-link-down --scripted
+
+# シナリオ E（セリフ事前定義 / 動作確認のみ）
+uv run agentic-ni-demo --scenario node-failure --scripted
 
 # ── 共通 ──────────────────────────────────────────────────────────────
-# リアル LLM モード（.env 設定済みの場合）
-agentic-ni-demo --scenario core-link-down
-
 # 最新レポートを確認
 cat $(ls -t reports/demo*.md | head -1)
 ```
