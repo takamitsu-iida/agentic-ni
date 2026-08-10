@@ -61,6 +61,8 @@ nodes:
   - id: "n0"
     label: "Spine1"
     node_definition: "iosv"
+    tags:
+      - "serial:5001"
     x: -150
     y: -200
     configuration: |
@@ -136,6 +138,8 @@ nodes:
   - id: "n1"
     label: "Spine2"
     node_definition: "iosv"
+    tags:
+      - "serial:5002"
     x: 150
     y: -200
     configuration: |
@@ -213,6 +217,8 @@ nodes:
   - id: "n2"
     label: "Leaf1"
     node_definition: "iosv"
+    tags:
+      - "serial:5101"
     x: -300
     y: 0
     configuration: |
@@ -284,6 +290,8 @@ nodes:
   - id: "n3"
     label: "Leaf2"
     node_definition: "iosv"
+    tags:
+      - "serial:5102"
     x: 0
     y: 0
     configuration: |
@@ -347,6 +355,8 @@ nodes:
   - id: "n4"
     label: "Leaf3"
     node_definition: "iosv"
+    tags:
+      - "serial:5103"
     x: 300
     y: 0
     configuration: |
@@ -414,6 +424,8 @@ nodes:
   - id: "n5"
     label: "Ubuntu"
     node_definition: "ubuntu"
+    tags:
+      - "serial:6000"
     x: -300
     y: 200
     configuration: |
