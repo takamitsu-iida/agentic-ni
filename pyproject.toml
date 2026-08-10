@@ -55,6 +55,7 @@ all = [
 agentic-ni = "agentic_ni.graph:main"
 agentic-ni-ts = "agentic_ni.distributed.orchestrator:main"
 agentic-ni-demo = "agentic_ni.distributed.demo_runner:main"
+agentic-ni-lab = "agentic_ni.lab_cli:main"
 
 [build-system]
 requires = ["hatchling"]

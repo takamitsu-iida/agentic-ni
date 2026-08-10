@@ -116,10 +116,35 @@ PUT /api/v0/labs/{lab_id}/nodes/n3/state  {"state": "stopped"}
 uv sync  # または pip install -e .
 ```
 
+`.env` に以下を設定しておくこと（CML 接続用）:
+```
+CML_URL=https://<CML_HOST>
+CML_USERNAME=<USER>
+CML_PASSWORD=<PASS>
+CML_VERIFY_SSL=false   # 自己署名証明書の場合
+```
+
 ### シナリオ D（10台 — CML コアリンク停止）
+
+**① ラボを作成・起動する（初回のみ）**
 ```bash
-# CML で l0 リンクを停止した後に実行
+agentic-ni-lab deploy --config demo-large
+# → Lab ID が表示される（例: lab_id=abc123...）
+```
+
+**② コアリンク l0（R1-R2 間）を停止して障害を注入する**
+```bash
+agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
+```
+
+**③ AI デモを実行する**
+```bash
 agentic-ni-demo --scenario core-link-down --scripted
+```
+
+**④ 障害復旧（デモ後）**
+```bash
+agentic-ni-lab fault --lab-id <lab_id> --link l0
 ```
 
 ### シナリオ E（10台 — CML ノード停止）
@@ -264,9 +289,24 @@ agentic-ni-demo --scenario node-failure --scripted
 ## 7. デモ実行コマンド早見表
 
 ```bash
+# ── CML ラボ管理 ──────────────────────────────────────────────────────
+# ラボ作成・起動（demo-large = 10台構成）
+agentic-ni-lab deploy --config demo-large
+
+# CML 上のラボ一覧確認
+agentic-ni-lab list
+
+# ノード状態確認
+agentic-ni-lab status --lab-id <lab_id>
+
+# ラボ削除
+agentic-ni-lab delete --lab-id <lab_id>
+
 # ── 10台構成（CML 環境 — 推奨） ───────────────────────────────────────
-# シナリオ D: コアリンク停止（CML で l0 を停止後に実行）
+# シナリオ D: コアリンク停止
+agentic-ni-lab fault --lab-id <lab_id> --link l0 --down
 agentic-ni-demo --scenario core-link-down --scripted
+agentic-ni-lab fault --lab-id <lab_id> --link l0          # 復旧
 
 # シナリオ E: ディストリビューションルータ停止（CML で n3 を停止後に実行）
 agentic-ni-demo --scenario node-failure --scripted
