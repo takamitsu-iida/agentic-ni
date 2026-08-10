@@ -421,6 +421,17 @@ nodes:
       hostname: ubuntu-agent
       manage_etc_hosts: true
 
+      users:
+        - name: cisco
+          sudo: ALL=(ALL) NOPASSWD:ALL
+          shell: /bin/bash
+          lock_passwd: false
+
+      chpasswd:
+        list: |
+          cisco:cisco
+        expire: false
+
       # ens2: 192.168.100.1/30 (管理セグメント / Leaf1 直結)
       # ens3: DHCP (external-connector 経由でインターネット)
       write_files:
