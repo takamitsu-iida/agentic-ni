@@ -4,6 +4,9 @@
 # 生成したコンフィグは追跡不要
 configs/
 
+# レポートも追跡不要
+reports/
+
 # pyATS ルーター操作ログ
 logs/
 
