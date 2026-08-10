@@ -48,13 +48,11 @@ def _load_configs(config_name: str) -> tuple[str, dict[str, str]]:
 
     topology_yaml = topo_path.read_text(encoding="utf-8")
 
+    # R*.cfg があれば上書き用に読み込む。なければ topology.yaml の embedded config をそのまま使う
     device_configs: dict[str, str] = {}
     for cfg_path in sorted(config_dir.glob("R*.cfg")):
-        device_name = cfg_path.stem  # ファイル名から拡張子を除いた部分（例: R1）
+        device_name = cfg_path.stem
         device_configs[device_name] = cfg_path.read_text(encoding="utf-8")
-
-    if not device_configs:
-        raise FileNotFoundError(f"デバイス設定ファイル（R*.cfg）が見つかりません: {config_dir}")
 
     return topology_yaml, device_configs
 
