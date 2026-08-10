@@ -13,11 +13,13 @@ name = "agentic-ni"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "genie" },
     { name = "langchain-anthropic" },
     { name = "langchain-core" },
     { name = "langchain-ollama" },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "pyats" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -27,11 +29,9 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "chromadb" },
-    { name = "genie" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "nats-py" },
     { name = "paho-mqtt" },
-    { name = "pyats" },
     { name = "pysqlite3-binary" },
 ]
 checkpoint = [
@@ -40,10 +40,6 @@ checkpoint = [
 distributed = [
     { name = "nats-py" },
     { name = "paho-mqtt" },
-]
-network = [
-    { name = "genie" },
-    { name = "pyats" },
 ]
 rag = [
     { name = "chromadb" },
@@ -60,8 +56,7 @@ dev = [
 requires-dist = [
     { name = "chromadb", marker = "extra == 'all'", specifier = ">=0.5" },
     { name = "chromadb", marker = "extra == 'rag'", specifier = ">=0.5" },
-    { name = "genie", marker = "extra == 'all'", specifier = ">=24.0" },
-    { name = "genie", marker = "extra == 'network'", specifier = ">=24.0" },
+    { name = "genie", specifier = ">=24.0" },
     { name = "langchain-anthropic", specifier = ">=0.3" },
     { name = "langchain-core", specifier = ">=0.3" },
     { name = "langchain-ollama", specifier = ">=0.2" },
@@ -73,8 +68,7 @@ requires-dist = [
     { name = "nats-py", marker = "extra == 'distributed'", specifier = ">=2.3" },
     { name = "paho-mqtt", marker = "extra == 'all'", specifier = ">=2.0" },
     { name = "paho-mqtt", marker = "extra == 'distributed'", specifier = ">=2.0" },
-    { name = "pyats", marker = "extra == 'all'", specifier = ">=24.0" },
-    { name = "pyats", marker = "extra == 'network'", specifier = ">=24.0" },
+    { name = "pyats", specifier = ">=24.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pysqlite3-binary", marker = "extra == 'all'", specifier = ">=0.5" },
     { name = "pysqlite3-binary", marker = "extra == 'rag'", specifier = ">=0.5" },
