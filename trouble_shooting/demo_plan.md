@@ -96,8 +96,13 @@ PUT /api/v0/labs/{lab_id}/nodes/n3/state  {"state": "stopped"}
 
 ### 前提条件
 ```bash
-uv sync  # または pip install -e .
+uv sync    # pyATS/Genie を含む全依存をインストール
 ```
+
+> **注意**: `/tmp` の書き込み権限がない実行環境では以下を使用してください:
+> ```bash
+> mkdir -p ~/tmp_uv && TMPDIR=~/tmp_uv uv sync
+> ```
 
 `.env` に以下を設定しておくこと（CML 接続用）:
 ```

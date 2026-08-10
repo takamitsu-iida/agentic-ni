@@ -366,6 +366,14 @@ class CMLDeviceToolkit:
         try:
             return node.run_pyats_command(command)
         except Exception as exc:
+            # PyatsNotInstalled は文字列比較で判定（import 不要）
+            if type(exc).__name__ == "PyatsNotInstalled":
+                msg = (
+                    "ERROR: pyATS が実行環境にインストールされていません。"
+                    " 実行環境で 'uv sync --extra network' を実行してください。"
+                )
+                logger.error("[%s] %s", self._device_name, msg)
+                raise RuntimeError(msg) from None
             logger.error(
                 "[%s] run_pyats_command(%r) 失敗: %s: %s",
                 self._device_name, command, type(exc).__name__, exc,

@@ -15,14 +15,13 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
-]
-
-# オプション依存: Phase 4 (pyATS/Genie) で追加インストール
-# uv sync --extra network で有効化
-[project.optional-dependencies]
-network = [
     "pyats>=24.0",
     "genie>=24.0",
+]
+
+[project.optional-dependencies]
+network = [
+    # 後方互換のため残す（pyats/genie は dependencies に昇格済み）
 ]
 rag = [
     "chromadb>=0.5",
@@ -30,7 +29,7 @@ rag = [
 ]
 live = [
     # netmiko は不要。pyATS/Unicon で実機へ直接接続する。
-    # 必要条件: uv sync --extra network
+    # pyats/genie は dependencies に含まれるため追加不要
 ]
 # チェックポインター（設計ループの再開機能）
 # uv sync --extra checkpoint で有効化
@@ -42,8 +41,6 @@ distributed = [
     "nats-py>=2.3",     # NATSBus バックエンド
 ]
 all = [
-    "pyats>=24.0",
-    "genie>=24.0",
     "chromadb>=0.5",
     "pysqlite3-binary>=0.5",
     "langgraph-checkpoint-sqlite>=2.0",
