@@ -91,15 +91,35 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
     print(f"   タイトル: {title}")
     print()
     print("次のステップ:")
-    print(f"  # シナリオD デモ実行（モック）:")
-    print(f"  agentic-ni-demo --scenario core-link-down --scripted")
-    print()
-    print(f"  # シナリオD コアリンクを停止（CML障害注入）:")
-    print(f"  agentic-ni-lab fault --lab-id {lab_id} --link l0 --down")
+    _print_next_steps(args.config, lab_id, title)
+    return 0
+
+
+def _print_next_steps(config: str, lab_id: str, title: str) -> None:
+    """設定ごとの次のステップを表示する。"""
+    if config == "clos":
+        topo = f"trouble_shooting/configs/clos/topology.yaml"
+        testbed = f"trouble_shooting/configs/clos/testbed.yaml"
+        print(f"  # ② Ubuntu ノード上でエージェントを起動する:")
+        print(f"  sudo agentic-ni-ubuntu \\")
+        print(f"      --topology {topo} \\")
+        print(f"      --testbed {testbed}")
+        print()
+        print(f"  # ③ 障害を発生させる（シナリオ G: Spine1-Leaf1 リンク断）:")
+        print(f"  uv run agentic-ni-lab fault --title {title} --link l0 --down")
+        print()
+        print(f"  # ③ 障害を発生させる（シナリオ H: Leaf2 ノード停止）:")
+        print(f"  uv run agentic-ni-lab fault --title {title} --node n3 --down")
+        print()
+        print(f"  # ④ 障害復旧:")
+        print(f"  uv run agentic-ni-lab fault --title {title} --link l0   # リンク復旧")
+        print(f"  uv run agentic-ni-lab fault --title {title} --node n3   # ノード復旧")
+    else:
+        print(f"  # 障害注入（CML リンク停止）:")
+        print(f"  uv run agentic-ni-lab fault --lab-id {lab_id} --link l0 --down")
     print()
     print(f"  # ラボ削除:")
-    print(f"  agentic-ni-lab delete --lab-id {lab_id}")
-    return 0
+    print(f"  uv run agentic-ni-lab delete --lab-id {lab_id}")
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
