@@ -347,14 +347,21 @@ class CMLDeviceToolkit:
         self._lab_id = lab_id
         self._human_queue = human_queue
         self._readonly = readonly
+        self._cached_client = None
+        self._cached_lab = None  # lab と pyATS testbed をキャッシュ
 
     def _get_node(self):
-        """CML から対応ノードオブジェクトを取得する（同期・呼び出し毎に接続）。"""
+        """CML から対応ノードオブジェクトを取得する（sync_testbed は初回のみ）。"""
+        import os
         from agentic_ni.tools.cml_tools import _get_client, _get_lab
-        client = _get_client()
-        lab = _get_lab(client, self._lab_id)
-        lab.sync_states()
-        for node in lab.nodes():
+        if self._cached_lab is None:
+            self._cached_client = _get_client()
+            self._cached_lab = _get_lab(self._cached_client, self._lab_id)
+            username = os.getenv("CML_USERNAME", "")
+            password = os.getenv("CML_PASSWORD", "")
+            self._cached_lab.pyats.sync_testbed(username, password)
+        self._cached_lab.sync_states()
+        for node in self._cached_lab.nodes():
             if node.label == self._device_name:
                 return node
         raise RuntimeError(
