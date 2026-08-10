@@ -151,6 +151,45 @@ def _cmd_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_yaml_link(lab_id: str, yaml_link_id: str) -> tuple[str, str] | None:
+    """topology YAML の l0/l1 スタイルリンク ID を接続ノード名のペアに解決する。
+
+    Returns:
+        (node_a_label, node_b_label) または解決できない場合 None
+    """
+    import re
+    import yaml
+    from agentic_ni.tools import cml_tools
+
+    # ラボタイトルからコンフィグ名を推定（agentic-ni-{config} 形式）
+    try:
+        client = cml_tools._get_client()
+        client.join_existing_lab(lab_id)
+        lab = client.get_local_lab(lab_id)
+        config_name = re.sub(r'^agentic-ni-', '', lab.title) if lab else None
+    except Exception:
+        config_name = None
+
+    if not config_name:
+        return None
+
+    topo_path = _CONFIGS_DIR / config_name / "topology.yaml"
+    if not topo_path.exists():
+        return None
+
+    data = yaml.safe_load(topo_path.read_text(encoding="utf-8"))
+    nodes_by_id = {n["id"]: n["label"] for n in data.get("nodes", [])}
+
+    for link in data.get("links", []):
+        if link.get("id") == yaml_link_id or link.get("label") == yaml_link_id:
+            node_a = nodes_by_id.get(link["n1"])
+            node_b = nodes_by_id.get(link["n2"])
+            if node_a and node_b:
+                return node_a, node_b
+
+    return None
+
+
 def _cmd_fault(args: argparse.Namespace) -> int:
     """fault サブコマンド: リンクまたはノードの状態を変更する（障害注入）。"""
     from agentic_ni.tools import cml_tools
@@ -158,8 +197,21 @@ def _cmd_fault(args: argparse.Namespace) -> int:
     if args.link:
         up = not args.down
         action = "停止" if args.down else "復旧"
+        link_spec = args.link
+
+        # l0/l1/... スタイルのリンク ID を topology YAML から解決してノードペアに変換する
+        import re
+        if re.match(r'^l\d+$', link_spec):
+            resolved = _resolve_yaml_link(args.lab_id, link_spec)
+            if resolved:
+                node_a, node_b = resolved
+                link_spec = f"{node_a}:{node_b}"  # set_link_state のノードペア形式
+            else:
+                print(f"  [警告] {args.link} を topology YAML で解決できませんでした。CML ID として扱います。",
+                      file=sys.stderr)
+
         print(f"リンク {args.link} を{action}中 (lab_id={args.lab_id}) ...")
-        cml_tools.set_link_state(args.lab_id, args.link, up=up)
+        cml_tools.set_link_state(args.lab_id, link_spec, up=up)
         print(f"  ✅ リンク {args.link} を{action}しました。")
     else:
         print("[ERROR] --link を指定してください（現在 --node は未実装）。", file=sys.stderr)

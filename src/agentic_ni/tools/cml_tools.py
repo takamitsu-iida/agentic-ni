@@ -418,12 +418,29 @@ def set_link_state(lab_id: str, link_id: str, up: bool) -> None:
     # スキップするため _links が空になる。lab.sync() で強制的にトポロジーを取得する。
     lab.sync(topology_only=True)
 
-    # まず CML 内部 ID で検索し、見つからなければラベルで検索する
     from virl2_client.exceptions import LinkNotFound as _LinkNotFound
+
+    # 1) CML 内部 UUID で検索
+    link = None
     try:
         link = lab.get_link_by_id(link_id)
     except _LinkNotFound:
+        pass
+
+    # 2) CML ラベル文字列で検索
+    if link is None:
         link = next((lnk for lnk in lab.links() if lnk.label == link_id), None)
+
+    # 3) "NodeA:NodeB" ノードペア形式で検索（順不同）
+    if link is None and ":" in link_id:
+        na, nb = link_id.split(":", 1)
+        link = next(
+            (
+                lnk for lnk in lab.links()
+                if {lnk.node_a.label, lnk.node_b.label} == {na, nb}
+            ),
+            None,
+        )
 
     if link is None:
         available = [(lnk.id, lnk.label) for lnk in lab.links()]
@@ -433,11 +450,9 @@ def set_link_state(lab_id: str, link_id: str, up: bool) -> None:
         )
 
     if up:
-        link.interface_a.bring_up()
-        link.interface_b.bring_up()
+        link.start()
     else:
-        link.interface_a.shutdown()
-        link.interface_b.shutdown()
+        link.stop()
 
 
 def wait_for_nodes_ready(lab_id: str, timeout: int = 300) -> bool:
