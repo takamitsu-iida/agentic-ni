@@ -50,10 +50,8 @@ all = [
 
 [project.scripts]
 agentic-ni = "agentic_ni.graph:main"
-agentic-ni-ts = "agentic_ni.distributed.orchestrator:main"
-agentic-ni-demo = "agentic_ni.distributed.demo_runner:main"
 agentic-ni-lab = "agentic_ni.lab_cli:main"
-agentic-ni-watch = "agentic_ni.distributed.watch_cli:main"
+agentic-ni-ubuntu = "agentic_ni.distributed.ubuntu_cli:main"
 
 [build-system]
 requires = ["hatchling"]

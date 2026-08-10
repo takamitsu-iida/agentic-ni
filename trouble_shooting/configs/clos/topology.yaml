@@ -1,0 +1,530 @@
+lab:
+  title: agentic-ni-clos
+  description: >
+    IP CLOS (BGP ファブリック) — Spine×2 + Leaf×3 + Ubuntu エージェントノード。
+    Ubuntu が SYSLOG を UDP 514 で受信し、全デバイスエージェントへブロードキャストする。
+    external-connector 経由でインターネット (LLM API) にアクセス。
+  version: "0.1.0"
+
+#
+# ネットワーク構成図
+#
+#   ┌─────────────────────────────────────────────────┐
+#   │              Spine 層 (AS 65000)                │
+#   │         [Spine1]           [Spine2]             │
+#   │          .1                  .1                 │
+#   └──────/──────\───────────/──────\────────────────┘
+#          │        │         │        │
+#   10.1.11│  10.1.12│  10.2.11│  10.2.12│  10.x.13 ...
+#    /30   │   /30   │   /30   │   /30   │
+#         .2        .2        .2        .2
+#   ┌─────────────────────────────────────────────────┐
+#   │              Leaf 層                             │
+#   │   [Leaf1]       [Leaf2]       [Leaf3]           │
+#   │  AS 65011      AS 65012      AS 65013            │
+#   └───────────────────────────────────────────────-─┘
+#         │
+#   192.168.100.0/30  (管理セグメント / SYSLOG 受信)
+#         │.2
+#   [Ubuntu]─────────[external-connector]
+#     .1                  (DHCP/NAT)
+#         └── SYSLOG UDP 514 受信
+#         └── SSH (pyATS) → Spine1/2, Leaf1/2/3
+#         └── HTTPS → LLM API (OpenAI / Anthropic)
+#
+# P2Pリンク アドレス体系 (/30)
+#   Spine1-Leaf1 : 10.1.11.0/30   Spine1=.1, Leaf1=.2
+#   Spine1-Leaf2 : 10.1.12.0/30   Spine1=.1, Leaf2=.2
+#   Spine1-Leaf3 : 10.1.13.0/30   Spine1=.1, Leaf3=.2
+#   Spine2-Leaf1 : 10.2.11.0/30   Spine2=.1, Leaf1=.2
+#   Spine2-Leaf2 : 10.2.12.0/30   Spine2=.1, Leaf2=.2
+#   Spine2-Leaf3 : 10.2.13.0/30   Spine2=.1, Leaf3=.2
+#   Leaf1-Ubuntu : 192.168.100.0/30  Ubuntu=.1, Leaf1=.2
+#
+# Loopback0 (Router-ID) /32
+#   Spine1 : 10.0.0.1/32
+#   Spine2 : 10.0.0.2/32
+#   Leaf1  : 10.0.0.11/32
+#   Leaf2  : 10.0.0.12/32
+#   Leaf3  : 10.0.0.13/32
+#
+# ルーティングプロトコル: eBGP (RFC 7938 準拠 IP CLOS)
+#   Spine ASN : 65000 (Spine1, Spine2 共通)
+#   Leaf1 ASN : 65011
+#   Leaf2 ASN : 65012
+#   Leaf3 ASN : 65013
+#
+
+nodes:
+  # ── Spine 層 ─────────────────────────────────────────────────
+
+  - id: "n0"
+    label: "Spine1"
+    node_definition: "iosv"
+    x: -150
+    y: -200
+    configuration: |
+      hostname Spine1
+      !
+      no ip domain-lookup
+      ip domain-name lab.local
+      !
+      username cisco privilege 15 secret cisco
+      !
+      service timestamps log datetime msec
+      logging host 192.168.100.1
+      logging trap informational
+      !
+      ip route 192.168.100.0 255.255.255.252 10.1.11.2
+      !
+      interface Loopback0
+       ip address 10.0.0.1 255.255.255.255
+      !
+      interface GigabitEthernet0/0
+       description to Leaf1
+       ip address 10.1.11.1 255.255.255.252
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description to Leaf2
+       ip address 10.1.12.1 255.255.255.252
+       no shutdown
+      !
+      interface GigabitEthernet0/2
+       description to Leaf3
+       ip address 10.1.13.1 255.255.255.252
+       no shutdown
+      !
+      router bgp 65000
+       bgp router-id 10.0.0.1
+       bgp log-neighbor-changes
+       neighbor 10.1.11.2 remote-as 65011
+       neighbor 10.1.11.2 description Leaf1
+       neighbor 10.1.12.2 remote-as 65012
+       neighbor 10.1.12.2 description Leaf2
+       neighbor 10.1.13.2 remote-as 65013
+       neighbor 10.1.13.2 description Leaf3
+       !
+       address-family ipv4
+        network 10.0.0.1 mask 255.255.255.255
+        neighbor 10.1.11.2 activate
+        neighbor 10.1.12.2 activate
+        neighbor 10.1.13.2 activate
+       exit-address-family
+      !
+      ip ssh version 2
+      !
+      line vty 0 4
+       login local
+       transport input ssh
+      !
+      end
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "GigabitEthernet0/2"
+        slot: 2
+        type: physical
+
+  - id: "n1"
+    label: "Spine2"
+    node_definition: "iosv"
+    x: 150
+    y: -200
+    configuration: |
+      hostname Spine2
+      !
+      no ip domain-lookup
+      ip domain-name lab.local
+      !
+      username cisco privilege 15 secret cisco
+      !
+      service timestamps log datetime msec
+      logging host 192.168.100.1
+      logging trap informational
+      !
+      ip route 192.168.100.0 255.255.255.252 10.2.11.2
+      !
+      interface Loopback0
+       ip address 10.0.0.2 255.255.255.255
+      !
+      interface GigabitEthernet0/0
+       description to Leaf1
+       ip address 10.2.11.1 255.255.255.252
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description to Leaf2
+       ip address 10.2.12.1 255.255.255.252
+       no shutdown
+      !
+      interface GigabitEthernet0/2
+       description to Leaf3
+       ip address 10.2.13.1 255.255.255.252
+       no shutdown
+      !
+      router bgp 65000
+       bgp router-id 10.0.0.2
+       bgp log-neighbor-changes
+       neighbor 10.2.11.2 remote-as 65011
+       neighbor 10.2.11.2 description Leaf1
+       neighbor 10.2.12.2 remote-as 65012
+       neighbor 10.2.12.2 description Leaf2
+       neighbor 10.2.13.2 remote-as 65013
+       neighbor 10.2.13.2 description Leaf3
+       !
+       address-family ipv4
+        network 10.0.0.2 mask 255.255.255.255
+        neighbor 10.2.11.2 activate
+        neighbor 10.2.12.2 activate
+        neighbor 10.2.13.2 activate
+       exit-address-family
+      !
+      ip ssh version 2
+      !
+      line vty 0 4
+       login local
+       transport input ssh
+      !
+      end
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "GigabitEthernet0/2"
+        slot: 2
+        type: physical
+
+  # ── Leaf 層 ──────────────────────────────────────────────────
+
+  - id: "n2"
+    label: "Leaf1"
+    node_definition: "iosv"
+    x: -300
+    y: 0
+    configuration: |
+      hostname Leaf1
+      !
+      no ip domain-lookup
+      ip domain-name lab.local
+      !
+      username cisco privilege 15 secret cisco
+      !
+      service timestamps log datetime msec
+      logging host 192.168.100.1
+      logging trap informational
+      !
+      interface Loopback0
+       ip address 10.0.0.11 255.255.255.255
+      !
+      interface GigabitEthernet0/0
+       description to Spine1
+       ip address 10.1.11.2 255.255.255.252
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description to Spine2
+       ip address 10.2.11.2 255.255.255.252
+       no shutdown
+      !
+      interface GigabitEthernet0/2
+       description to Ubuntu
+       ip address 192.168.100.2 255.255.255.252
+       no shutdown
+      !
+      router bgp 65011
+       bgp router-id 10.0.0.11
+       bgp log-neighbor-changes
+       neighbor 10.1.11.1 remote-as 65000
+       neighbor 10.1.11.1 description Spine1
+       neighbor 10.2.11.1 remote-as 65000
+       neighbor 10.2.11.1 description Spine2
+       !
+       address-family ipv4
+        network 10.0.0.11 mask 255.255.255.255
+        network 192.168.100.0 mask 255.255.255.252
+        neighbor 10.1.11.1 activate
+        neighbor 10.2.11.1 activate
+       exit-address-family
+      !
+      ip ssh version 2
+      !
+      line vty 0 4
+       login local
+       transport input ssh
+      !
+      end
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "GigabitEthernet0/2"
+        slot: 2
+        type: physical
+
+  - id: "n3"
+    label: "Leaf2"
+    node_definition: "iosv"
+    x: 0
+    y: 0
+    configuration: |
+      hostname Leaf2
+      !
+      no ip domain-lookup
+      ip domain-name lab.local
+      !
+      username cisco privilege 15 secret cisco
+      !
+      service timestamps log datetime msec
+      logging host 192.168.100.1
+      logging trap informational
+      !
+      ip route 192.168.100.0 255.255.255.252 10.1.12.1
+      !
+      interface Loopback0
+       ip address 10.0.0.12 255.255.255.255
+      !
+      interface GigabitEthernet0/0
+       description to Spine1
+       ip address 10.1.12.2 255.255.255.252
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description to Spine2
+       ip address 10.2.12.2 255.255.255.252
+       no shutdown
+      !
+      router bgp 65012
+       bgp router-id 10.0.0.12
+       bgp log-neighbor-changes
+       neighbor 10.1.12.1 remote-as 65000
+       neighbor 10.1.12.1 description Spine1
+       neighbor 10.2.12.1 remote-as 65000
+       neighbor 10.2.12.1 description Spine2
+       !
+       address-family ipv4
+        network 10.0.0.12 mask 255.255.255.255
+        neighbor 10.1.12.1 activate
+        neighbor 10.2.12.1 activate
+       exit-address-family
+      !
+      ip ssh version 2
+      !
+      line vty 0 4
+       login local
+       transport input ssh
+      !
+      end
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+
+  - id: "n4"
+    label: "Leaf3"
+    node_definition: "iosv"
+    x: 300
+    y: 0
+    configuration: |
+      hostname Leaf3
+      !
+      no ip domain-lookup
+      ip domain-name lab.local
+      !
+      username cisco privilege 15 secret cisco
+      !
+      service timestamps log datetime msec
+      logging host 192.168.100.1
+      logging trap informational
+      !
+      ip route 192.168.100.0 255.255.255.252 10.1.13.1
+      !
+      interface Loopback0
+       ip address 10.0.0.13 255.255.255.255
+      !
+      interface GigabitEthernet0/0
+       description to Spine1
+       ip address 10.1.13.2 255.255.255.252
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description to Spine2
+       ip address 10.2.13.2 255.255.255.252
+       no shutdown
+      !
+      router bgp 65013
+       bgp router-id 10.0.0.13
+       bgp log-neighbor-changes
+       neighbor 10.1.13.1 remote-as 65000
+       neighbor 10.1.13.1 description Spine1
+       neighbor 10.2.13.1 remote-as 65000
+       neighbor 10.2.13.1 description Spine2
+       !
+       address-family ipv4
+        network 10.0.0.13 mask 255.255.255.255
+        neighbor 10.1.13.1 activate
+        neighbor 10.2.13.1 activate
+       exit-address-family
+      !
+      ip ssh version 2
+      !
+      line vty 0 4
+       login local
+       transport input ssh
+      !
+      end
+    interfaces:
+      - id: "i0"
+        label: "GigabitEthernet0/0"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "GigabitEthernet0/1"
+        slot: 1
+        type: physical
+
+  # ── Ubuntu エージェントノード ─────────────────────────────────
+  # ens2: Leaf1 との管理セグメント (192.168.100.1/30) — SYSLOG 受信 + SSH
+  # ens3: external-connector — DHCP で Internet (LLM API) アクセス
+
+  - id: "n5"
+    label: "Ubuntu"
+    node_definition: "ubuntu"
+    x: -300
+    y: 200
+    configuration: |
+      #cloud-config
+      hostname: ubuntu-agent
+      manage_etc_hosts: true
+
+      # ens2: 192.168.100.1/30 (管理セグメント / Leaf1 直結)
+      # ens3: DHCP (external-connector 経由でインターネット)
+      write_files:
+        - path: /etc/netplan/50-clos.yaml
+          permissions: "0600"
+          content: |
+            network:
+              version: 2
+              ethernets:
+                ens2:
+                  addresses:
+                    - 192.168.100.1/30
+                  routes:
+                    - to: 10.0.0.0/8
+                      via: 192.168.100.2
+                ens3:
+                  dhcp4: true
+
+      runcmd:
+        - netplan apply
+        - apt-get update -qq
+        - apt-get install -y -qq python3-pip git
+        - pip3 install uv --quiet
+    interfaces:
+      - id: "i0"
+        label: "ens2"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "ens3"
+        slot: 1
+        type: physical
+
+  # ── External Connector (インターネット接続) ──────────────────
+
+  - id: "n6"
+    label: "Internet"
+    node_definition: "external_connector"
+    x: -150
+    y: 350
+    configuration: "bridge0"
+    interfaces:
+      - id: "i0"
+        label: "port"
+        slot: 0
+        type: physical
+
+links:
+  # ── Spine1 ↔ Leaf (アップリンク) ─────────────────────────────
+  - id: "l0"
+    n1: "n0"
+    i1: "i0"
+    n2: "n2"
+    i2: "i0"
+    label: "Spine1-Leaf1"
+
+  - id: "l1"
+    n1: "n0"
+    i1: "i1"
+    n2: "n3"
+    i2: "i0"
+    label: "Spine1-Leaf2"
+
+  - id: "l2"
+    n1: "n0"
+    i1: "i2"
+    n2: "n4"
+    i2: "i0"
+    label: "Spine1-Leaf3"
+
+  # ── Spine2 ↔ Leaf (アップリンク) ─────────────────────────────
+  - id: "l3"
+    n1: "n1"
+    i1: "i0"
+    n2: "n2"
+    i2: "i1"
+    label: "Spine2-Leaf1"
+
+  - id: "l4"
+    n1: "n1"
+    i1: "i1"
+    n2: "n3"
+    i2: "i1"
+    label: "Spine2-Leaf2"
+
+  - id: "l5"
+    n1: "n1"
+    i1: "i2"
+    n2: "n4"
+    i2: "i1"
+    label: "Spine2-Leaf3"
+
+  # ── Leaf1 ↔ Ubuntu (管理セグメント / SYSLOG 受信) ────────────
+  - id: "l6"
+    n1: "n2"
+    i1: "i2"
+    n2: "n5"
+    i2: "i0"
+    label: "Leaf1-Ubuntu"
+
+  # ── Ubuntu ↔ Internet (外部接続 / LLM API) ───────────────────
+  - id: "l7"
+    n1: "n5"
+    i1: "i1"
+    n2: "n6"
+    i2: "i0"
+    label: "Ubuntu-Internet"

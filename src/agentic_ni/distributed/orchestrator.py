@@ -45,6 +45,8 @@ _NODE_DEFINITION_MAP: dict[str, str] = {
     "alpine": "host",
     "desktop": "host",
     "server": "host",
+    "ubuntu": "host",
+    "external_connector": "host",
     "unmanaged_switch": "switch",
 }
 
@@ -249,6 +251,38 @@ class AgentOrchestrator:
         return dict(self._agents)
 
     def agent_count(self) -> int:
+        return len(self._agents)
+
+    # ------------------------------------------------------------------
+    # SYSLOG ブロードキャスト（SyslogServer からの呼び出し）
+    # ------------------------------------------------------------------
+
+    async def broadcast_syslog_to_all(
+        self,
+        source_hostname: str,
+        raw_msg: str,
+        severity: str = "unknown",
+    ) -> int:
+        """受信した SYSLOG を全エージェントにブロードキャストする。
+
+        各エージェントが自分の担当装置からの SYSLOG かどうかを判定し、
+        関係ある場合のみ調査を開始する（DeviceAgent._is_my_syslog() 参照）。
+
+        Args:
+            source_hostname: SYSLOG の送信元ホスト名（装置名）。
+            raw_msg:         SYSLOG 本文。
+            severity:        重大度文字列（例: "err", "warning"）。
+
+        Returns:
+            ブロードキャストしたエージェント数。
+        """
+        event = SyslogEvent(
+            raw_text=raw_msg,
+            severity=severity,
+            source_hostname=source_hostname,
+        )
+        for agent in self._agents.values():
+            await agent.inject_event(event)
         return len(self._agents)
 
     # ------------------------------------------------------------------

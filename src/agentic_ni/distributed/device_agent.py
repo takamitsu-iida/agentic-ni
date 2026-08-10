@@ -48,6 +48,7 @@ class SyslogEvent:
     """syslog メッセージから生成されるイベント。"""
     raw_text: str
     severity: str = "unknown"
+    source_hostname: str = ""  # SYSLOGを送信した装置のホスト名（空の場合はフィルタなし）
 
 
 @dataclass
@@ -188,9 +189,19 @@ class DeviceAgent:
         await self._bus.unsubscribe("network/agents/chat", self._on_bus_message)
         logger.info("[%s] 停止しました。", self.agent_id)
 
+    def _is_my_syslog(self, source_hostname: str) -> bool:
+        """SYSLOGの送信元が自分の担当装置かどうかを判定する。"""
+        return source_hostname.lower() == self.device_name.lower()
+
     async def inject_event(self, event: AgentEvent) -> None:
         """外部からイベントを注入する（syslog・ポーリング結果等）。"""
         if isinstance(event, SyslogEvent):
+            # source_hostname が設定されており自分と無関係なら無視（ブロードキャスト時のフィルタ）
+            if event.source_hostname and not self._is_my_syslog(event.source_hostname):
+                logger.debug(
+                    "[%s] 無関係な SYSLOG を無視: source=%s", self.agent_id, event.source_hostname
+                )
+                return
             if self._syslog_dedup.is_duplicate(self.agent_id, event.raw_text):
                 logger.info(
                     "[%s] 重複 syslog を破棄: %s", self.agent_id, event.raw_text[:80]

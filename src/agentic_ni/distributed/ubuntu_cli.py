@@ -1,0 +1,247 @@
+"""agentic-ni-ubuntu: CML 内 Ubuntu ノード上でデバイスエージェントを起動する CLI。
+
+CML 内の Ubuntu ノード上で実行することを想定しています。
+ネットワーク装置から SYSLOG を UDP で受信し、全デバイスエージェントへブロードキャストします。
+各エージェントは自分の担当装置からの SYSLOG を検知したら調査を開始します。
+エージェントは SSH（pyATS）で各装置に直接接続します。
+
+アーキテクチャ::
+
+    CML 内ネットワーク装置 → SYSLOG UDP → Ubuntu (本プログラム)
+                                                      |
+                                          ┌───────────┴───────────┐
+                                          │  Agent-R1 Agent-R2 …  │
+                                          │  (自分宛SYSLOGのみ処理) │
+                                          └───────────┬───────────┘
+                                                      |
+                                          SSH/pyATS → 各装置
+
+ネットワーク装置側の事前設定（全装置に適用）::
+
+    logging host <ubuntu_ip>
+    logging trap informational
+    service timestamps log datetime msec
+
+使用方法::
+
+    # 基本（UDP 514 受信、root 権限が必要）
+    sudo agentic-ni-ubuntu \\
+        --topology configs/demo2/topology.yaml \\
+        --testbed testbed.yaml
+
+    # テスト用（非特権ポート + モックツール）
+    agentic-ni-ubuntu \\
+        --topology configs/demo2/topology.yaml \\
+        --syslog-port 5140 \\
+        --mock-tools
+
+    # SYSLOG 手動送信によるテスト（別ターミナルから）
+    echo '<190>Aug 10 12:34:56 R1 %OSPF-5-ADJCHG: Nbr 10.0.0.2 to DOWN' | \\
+        nc -u -w1 127.0.0.1 5140
+"""
+
+from __future__ import annotations
+
+import asyncio
+import argparse
+import signal
+import sys
+from pathlib import Path
+from typing import Any
+
+from agentic_ni.distributed.bus import create_bus
+from agentic_ni.distributed.device_tools import DeviceToolkit, MockDeviceToolkit
+from agentic_ni.distributed.message import AgentMessage
+from agentic_ni.distributed.orchestrator import AgentOrchestrator
+from agentic_ni.distributed.syslog_server import SyslogServer
+from agentic_ni.logger import configure_logging, get_logger
+
+logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# ANSI カラー
+# ---------------------------------------------------------------------------
+
+_RESET   = "\033[0m"
+_BOLD    = "\033[1m"
+_DIM     = "\033[2m"
+_CYAN    = "\033[96m"
+_YELLOW  = "\033[93m"
+_GREEN   = "\033[92m"
+_RED     = "\033[91m"
+_MAGENTA = "\033[95m"
+_BLUE    = "\033[94m"
+_WHITE   = "\033[97m"
+
+_USE_COLOR = sys.stdout.isatty()
+
+
+def _c(code: str, text: str) -> str:
+    return f"{code}{text}{_RESET}" if _USE_COLOR else text
+
+
+# ---------------------------------------------------------------------------
+# Human エスカレーション表示
+# ---------------------------------------------------------------------------
+
+def _make_human_handler(shutdown_event: asyncio.Event):
+    async def handle_human_message(msg: AgentMessage) -> None:
+        print(f"\n{_c(_BOLD + _RED, '━' * 60)}")
+        print(_c(_BOLD + _RED, f"  [{msg.from_agent} → HUMAN]"))
+        print(msg.content)
+        print(_c(_BOLD + _RED, "━" * 60))
+    return handle_human_message
+
+
+# ---------------------------------------------------------------------------
+# ステータス表示
+# ---------------------------------------------------------------------------
+
+def _print_status(orchestrator: AgentOrchestrator, syslog_port: int) -> None:
+    print(f"\n{_c(_BOLD, '=' * 60)}")
+    print(_c(_BOLD + _GREEN, "  agentic-ni-ubuntu: エージェント起動完了"))
+    print(_c(_BOLD, "=" * 60))
+    print(f"  SYSLOG 受信ポート : UDP {syslog_port}")
+    print(f"  稼働エージェント  : {orchestrator.agent_count()} 台")
+    for agent_id, agent in orchestrator.get_all_agents().items():
+        neighbors = list(agent._memory.neighbor_map.keys())
+        print(f"  {_c(_CYAN, agent_id)} ({agent._device_type})")
+        if neighbors:
+            print(f"    隣接: {neighbors}")
+    print(_c(_BOLD, "=" * 60))
+    print(_c(_DIM, "\n  ネットワーク装置から SYSLOG を受信すると自動的に調査を開始します。"))
+    print(_c(_DIM, "  終了するには Ctrl+C を押してください。\n"))
+
+
+# ---------------------------------------------------------------------------
+# メイン
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """agentic-ni-ubuntu コマンドのエントリポイント。"""
+    parser = argparse.ArgumentParser(
+        description="Ubuntu ノード上でデバイスエージェントを起動して SYSLOG を監視する",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "例:\n"
+            "  sudo agentic-ni-ubuntu \\\n"
+            "      --topology configs/demo2/topology.yaml \\\n"
+            "      --testbed testbed.yaml\n\n"
+            "  # テスト（モックツール + 非特権ポート）\n"
+            "  agentic-ni-ubuntu \\\n"
+            "      --topology configs/demo2/topology.yaml \\\n"
+            "      --syslog-port 5140 --mock-tools\n"
+        ),
+    )
+    parser.add_argument(
+        "--topology", required=True,
+        help="topology.yaml のパス（例: configs/demo2/topology.yaml）",
+    )
+    parser.add_argument(
+        "--testbed",
+        help=(
+            "pyATS testbed YAML のパス。"
+            "各装置の IP アドレスと SSH 認証情報を記述するユーザー作成ファイル。"
+            "サンプル: testbed.yaml.sample 参照。"
+            "省略時はツールなしで起動（SYSLOG 受信のみ、show コマンド不可）。"
+        ),
+    )
+    parser.add_argument(
+        "--mock-tools", action="store_true",
+        help="モックツールを使用する（SSH/pyATS 不要のオフラインテスト用）",
+    )
+    parser.add_argument(
+        "--syslog-host", default="0.0.0.0",
+        help="SYSLOG リッスンアドレス（デフォルト: 0.0.0.0）",
+    )
+    parser.add_argument(
+        "--syslog-port", type=int, default=514,
+        help="SYSLOG リッスンポート（デフォルト: 514。1024以下は root 権限が必要）",
+    )
+    parser.add_argument(
+        "--bus", default="memory", choices=["memory", "mqtt", "nats"],
+        help="エージェント間メッセージバスのバックエンド（デフォルト: memory）",
+    )
+    parser.add_argument(
+        "--bus-host", default="localhost",
+        help="MQTT/NATS ブローカーのホスト名（--bus=mqtt/nats 時に使用）",
+    )
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="ログレベル（デフォルト: INFO）",
+    )
+    args = parser.parse_args()
+
+    configure_logging(level=args.log_level)
+    asyncio.run(_async_main(args))
+
+
+async def _async_main(args: Any) -> None:
+    """非同期メイン処理。"""
+    # Bus の生成と接続
+    bus_kwargs: dict = {}
+    if args.bus == "mqtt":
+        bus_kwargs = {"host": args.bus_host}
+    elif args.bus == "nats":
+        bus_kwargs = {"url": f"nats://{args.bus_host}:4222"}
+
+    bus = create_bus(args.bus, **bus_kwargs)
+    await bus.connect()
+
+    # ツールキットファクトリー
+    # DeviceToolkit は pyATS で装置に直接 SSH する（testbed.yaml が必要）
+    testbed_yaml: str | None = None
+    if args.testbed:
+        testbed_yaml = Path(args.testbed).read_text(encoding="utf-8")
+
+    def toolkit_factory(device_name: str):
+        if args.mock_tools:
+            return MockDeviceToolkit(device_name)
+        if not testbed_yaml:
+            return None  # testbed 未指定時はツールなし（SYSLOG 受信のみ）
+        return DeviceToolkit(
+            device_name=device_name,
+            testbed_yaml=testbed_yaml,
+        )
+
+    # オーケストレーター起動
+    orchestrator = AgentOrchestrator(
+        bus=bus,
+        toolkit_factory=toolkit_factory,
+    )
+
+    shutdown_event = asyncio.Event()
+
+    def _handle_sigint(signum, frame):
+        print(f"\n{_c(_YELLOW, '  Ctrl+C を受信しました。シャットダウンしています...')}")
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, _handle_sigint)
+
+    # SYSLOG サーバー
+    syslog_server = SyslogServer(
+        orchestrator=orchestrator,
+        host=args.syslog_host,
+        port=args.syslog_port,
+    )
+
+    try:
+        await orchestrator.start_from_topology(args.topology)
+        await syslog_server.start()
+        _print_status(orchestrator, args.syslog_port)
+
+        await asyncio.gather(
+            orchestrator.run_approval_loop(shutdown_event),
+            _wait_for_shutdown(shutdown_event),
+        )
+
+    finally:
+        await syslog_server.stop()
+        await orchestrator.stop_all()
+        await bus.close()
+        print(_c(_GREEN, "  シャットダウン完了。"))
+
+
+async def _wait_for_shutdown(shutdown_event: asyncio.Event) -> None:
+    await shutdown_event.wait()
