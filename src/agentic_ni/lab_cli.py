@@ -66,7 +66,8 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
     topology_yaml, device_configs = _load_configs(args.config)
 
     topo_data = yaml.safe_load(topology_yaml)
-    topo_node_count = len(topo_data.get("lab", {}).get("nodes", []))
+    # topology.yaml はトップレベルに nodes: を持つ形式
+    topo_node_count = len(topo_data.get("nodes", topo_data.get("lab", {}).get("nodes", [])))
 
     print(f"  topology.yaml: 読み込み完了 ({topo_node_count} ノード定義)")
     if device_configs:
@@ -75,6 +76,17 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
         print(f"  デバイス設定: なし（topology.yaml の embedded config を使用）")
 
     title = args.title or f"agentic-ni-{args.config}"
+
+    # 同名ラボが既に存在する場合は中止
+    from agentic_ni.tools import cml_tools as _cml
+    _client = _cml._get_client()
+    _existing = [lab for lab in _client.all_labs() if lab.title == title]
+    if _existing:
+        print(f"[ERROR] タイトル '{title}' のラボが既に存在します（Lab ID: {_existing[0].id}）。", file=sys.stderr)
+        print("既存ラボを削除してから再実行してください:", file=sys.stderr)
+        print(f"  uv run agentic-ni-lab delete --title {title}", file=sys.stderr)
+        return 1
+
     print(f"\nCML にラボをデプロイ中...")
     print(f"  ラボ名  : {title}")
     print(f"  ノード数: {topo_node_count} 台（topology.yaml 定義）")
@@ -299,7 +311,7 @@ def main() -> None:
         prog="agentic-ni-lab",
         description="CML ラボ管理ツール",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
 
     # deploy
     p_deploy = sub.add_parser("deploy", help="ラボを作成・起動する")
@@ -339,6 +351,10 @@ def main() -> None:
     p_status_id.add_argument("--title", default=None, help="対象ラボ名")
 
     args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
 
     handlers = {
         "deploy": _cmd_deploy,

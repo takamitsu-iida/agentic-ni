@@ -173,7 +173,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    configure_logging(level=args.log_level)
+    configure_logging(verbose=(args.log_level == "DEBUG"), quiet=(args.log_level in ("WARNING", "ERROR")))
     asyncio.run(_async_main(args))
 
 
