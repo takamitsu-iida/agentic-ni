@@ -24,7 +24,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agentic_ni.distributed.bus import MessageBus
-from agentic_ni.distributed.dedup import SyslogDeduplicator
+from agentic_ni.distributed.dedup import MessageDeduplicator, SyslogDeduplicator
 from agentic_ni.distributed.log_poller import DeviceLogPoller
 from agentic_ni.distributed.memory import DeviceMemory
 from agentic_ni.distributed.message import AgentMessage
@@ -37,6 +37,9 @@ _OUTPUT_LINE_RE = re.compile(r"TO:\s*(\S+)\s*\|\s*MSG:\s*(.*)", re.IGNORECASE)
 
 # ツール呼び出しループの上限（無限ループ防止）
 _MAX_TOOL_CALLS = 10
+
+# BusMessage チェーンのホップ上限（bus.py の MAX_HOP_COUNT と合わせる）
+_MAX_BUS_HOP_COUNT = 2
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +155,8 @@ class DeviceAgent:
         self._task: asyncio.Task | None = None
         self._current_event: AgentEvent | None = None  # hop_count 引き継ぎ用
         self._syslog_dedup = SyslogDeduplicator(window_seconds=60)
+        # 同一 origin_message_id チェーンの重複応答を防ぐ（300 秒 TTL）
+        self._chain_dedup = MessageDeduplicator(window_seconds=300)
         # デモ・可視化用フック（None の場合は無効）
         self.on_tool_call: "Callable[[str, str, dict], None] | None" = None
         self.on_llm_turn: "Callable[[str, int], None] | None" = None
@@ -237,6 +242,21 @@ class DeviceAgent:
         """バス経由のメッセージを受信してキューに積む。"""
         if msg.from_agent == self.agent_id:
             return  # 自分が送ったメッセージはスキップ
+        if msg.hop_count >= _MAX_BUS_HOP_COUNT:
+            logger.info(
+                "[%s] ホップ数上限(%d)に達したメッセージを破棄: from=%s hop=%d",
+                self.agent_id, _MAX_BUS_HOP_COUNT, msg.from_agent, msg.hop_count,
+            )
+            return
+        # 同一チェーン（origin_message_id）を複数回処理しない
+        chain_id = msg.origin_message_id or msg.message_id
+        if self._chain_dedup.is_duplicate(chain_id):
+            logger.info(
+                "[%s] 同一チェーンの重複メッセージを破棄: chain=%s from=%s",
+                self.agent_id, chain_id[:8], msg.from_agent,
+            )
+            return
+        self._chain_dedup.mark_seen(chain_id)
         await self._event_queue.put(BusMessageEvent(message=msg))
 
     # ------------------------------------------------------------------
@@ -395,7 +415,8 @@ def _event_summary(event: AgentEvent) -> str:
         return f"[SYSLOG/{event.severity}] {event.raw_text}"
     if isinstance(event, BusMessageEvent):
         msg = event.message
-        return f"[BUS from {msg.from_agent}] {msg.content}"
+        # hop_count を含めることで LLM が会話の深さを把握できる
+        return f"[BUS from {msg.from_agent}, hop={msg.hop_count}] {msg.content}"
     if isinstance(event, PollEvent):
         return f"[POLL/{event.source}] {event.content[:200]}"
     return str(event)

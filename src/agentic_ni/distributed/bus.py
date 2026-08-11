@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 # ハンドラーの型エイリアス
 AsyncHandlerFunc = Callable[[str, AgentMessage], Awaitable[None]]
 
-# メッセージループ検知の上限ホップ数
-MAX_HOP_COUNT = 5
+# メッセージループ検知の上限ホップ数（A→B→A で 2 往復目は破棄）
+MAX_HOP_COUNT = 2
 
 
 # ---------------------------------------------------------------------------
