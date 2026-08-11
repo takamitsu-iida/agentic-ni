@@ -115,6 +115,7 @@ nodes:
         neighbor 10.1.13.2 activate
        exit-address-family
       !
+      crypto key generate rsa modulus 2048
       ip ssh version 2
       !
       line vty 0 4
@@ -193,6 +194,7 @@ nodes:
         neighbor 10.2.13.2 activate
        exit-address-family
       !
+      crypto key generate rsa modulus 2048
       ip ssh version 2
       !
       line vty 0 4
@@ -272,6 +274,7 @@ nodes:
       !
       ip route 0.0.0.0 0.0.0.0 192.168.100.1
       !
+      crypto key generate rsa modulus 2048
       ip ssh version 2
       !
       line vty 0 4
@@ -342,6 +345,7 @@ nodes:
         neighbor 10.2.12.1 activate
        exit-address-family
       !
+      crypto key generate rsa modulus 2048
       ip ssh version 2
       !
       line vty 0 4
@@ -408,6 +412,7 @@ nodes:
         neighbor 10.2.13.1 activate
        exit-address-family
       !
+      crypto key generate rsa modulus 2048
       ip ssh version 2
       !
       line vty 0 4
@@ -538,9 +543,11 @@ nodes:
           export EDITOR=vi
           EOS
 
-        # Disable SSH client warnings
+        # Disable SSH client warnings (IOSv は ssh-rsa / legacy KEX のみ提供するため明示的に許可)
         - |
           cat - << 'EOS' > /etc/ssh/ssh_config.d/99_lab_env.conf
+          HostKeyAlgorithms +ssh-rsa
+          PubkeyAcceptedAlgorithms +ssh-rsa
           KexAlgorithms +diffie-hellman-group14-sha1,diffie-hellman-group1-sha1
           Ciphers +aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc,aes128-ctr,aes192-ctr,aes256-ctr
           StrictHostKeyChecking no
