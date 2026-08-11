@@ -420,7 +420,7 @@ nodes:
   # ── Ubuntu エージェントノード ─────────────────────────────────
   # ens2: Leaf1 との管理セグメント (192.168.100.1/30) — SYSLOG 受信 + SSH
   # ens3: external-connector — DHCP で Internet (LLM API) アクセス
-
+  # ens4: HyperV ホスト接続 (ホストからの SSH 接続用)
   - id: "n5"
     label: "Ubuntu"
     node_definition: "ubuntu"
@@ -428,17 +428,28 @@ nodes:
       - "serial:6000"
     x: -300
     y: 200
+    interfaces:
+      - id: "i0"
+        label: "ens2"
+        slot: 0
+        type: physical
+      - id: "i1"
+        label: "ens3"
+        slot: 1
+        type: physical
+      - id: "i2"
+        label: "ens4"
+        slot: 2
+        type: physical
     configuration: |
       #cloud-config
       hostname: ubuntu
       manage_etc_hosts: true
-
       users:
         - name: cisco
           sudo: ALL=(ALL) NOPASSWD:ALL
           shell: /bin/bash
           lock_passwd: false
-
       chpasswd:
         list: |
           cisco:cisco
@@ -451,6 +462,30 @@ nodes:
       timezone: Asia/Tokyo
       locale: en_US.UTF-8
 
+      # run apt-get update
+      # default false
+      package_update: true
+
+      # default false
+      package_upgrade: true
+
+      # reboot if required
+      package_reboot_if_required: true
+
+      # packages
+      packages:
+        - jq
+        - yq
+        - libxml2-utils  # xmllint
+        - curl
+        - wget
+        - git
+        - zip
+        - unzip
+        - make
+        - python3-pip
+        - python3-venv
+        - direnv
 
       # ens2: 192.168.100.1/30 (管理セグメント / Leaf1 直結)
       # ens3: DHCP (external-connector 経由でインターネット)
@@ -469,21 +504,22 @@ nodes:
                       via: 192.168.100.2
                 ens3:
                   dhcp4: true
+                ens4:
+                  addresses:
+                    - 192.168.0.100/24
 
       runcmd:
         - netplan apply
-        - apt-get update -qq
-        - apt-get install -y -qq python3-pip git curl jq yq libxml2-utils zip unzip make python3-venv direnv
-
         - curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
         - git clone https://github.com/takamitsu-iida/agentic-ni.git /home/cisco/agentic-ni
+        - git -C /home/cisco/agentic-ni checkout feature/trouble-shooting
         - chown -R cisco:cisco /home/cisco/agentic-ni
 
         # Resize terminal window
         - |
           cat - << 'EOS' >> /etc/bash.bashrc
           #
-          rsz () { if [[ -t 0 ]]; then local escape r c prompt=$(printf '\\e7\\e[r\\e[999;999H\\e[6n\\e8'); IFS='[;' read -sd R -p "$prompt" escape r c; stty cols $c rows $r; fi; }
+          rsz () if [[ -t 0 ]]; then local escape r c prompt=$(printf '\e7\e[r\e[999;999H\e[6n\e8'); IFS='[;' read -sd R -p "$prompt" escape r c; stty cols $c rows $r; fi;
           rsz
           EOS
 
@@ -527,15 +563,6 @@ nodes:
         - systemctl disable apparmor.service
         - systemctl mask apparmor.service
 
-    interfaces:
-      - id: "i0"
-        label: "ens2"
-        slot: 0
-        type: physical
-      - id: "i1"
-        label: "ens3"
-        slot: 1
-        type: physical
 
   # ── External Connector (インターネット接続) ──────────────────
 
@@ -550,6 +577,21 @@ nodes:
         label: "port"
         slot: 0
         type: physical
+
+  # ── External Connector (HyperVホスト接続) ──────────────────
+
+  - id: "n7"
+    label: "Bridge1"
+    node_definition: "external_connector"
+    x: -450
+    y: 350
+    configuration: "bridge1"
+    interfaces:
+      - id: "i0"
+        label: "port"
+        slot: 0
+        type: physical
+
 
 links:
   # ── Spine1 ↔ Leaf (アップリンク) ─────────────────────────────
@@ -611,3 +653,11 @@ links:
     n2: "n6"
     i2: "i0"
     label: "Ubuntu-Internet"
+
+  # ── Ubuntu ↔ HyperVホスト接続 (ホストからのSSH接続用) ───────────────────
+  - id: "l8"
+    n1: "n5"
+    i1: "i2"
+    n2: "n7"
+    i2: "i0"
+    label: "Ubuntu-Bridge1"
