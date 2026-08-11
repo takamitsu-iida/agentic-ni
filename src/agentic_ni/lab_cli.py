@@ -123,7 +123,7 @@ def _print_next_steps(config: str, lab_id: str, title: str) -> None:
         topo = f"trouble_shooting/configs/clos/topology.yaml"
         testbed = f"trouble_shooting/configs/clos/testbed.yaml"
         print(f"  # ② Ubuntu ノード上でエージェントを起動する:")
-        print(f"  sudo agentic-ni-ubuntu \\")
+        print(f"  agentic-ni-ubuntu \\")
         print(f"      --topology {topo} \\")
         print(f"      --testbed {testbed}")
         print()

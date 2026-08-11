@@ -24,6 +24,12 @@ CML 内の Ubuntu ノード上で実行することを想定しています。
 
 使用方法::
 
+    # ファイル監視モード（rsyslog 経由、root 不要）
+    agentic-ni-ubuntu \\
+        --topology configs/demo2/topology.yaml \\
+        --syslog-file /var/log/network-syslog.log \\
+        --testbed testbed.yaml
+
     # 基本（UDP 514 受信、root 権限が必要）
     sudo agentic-ni-ubuntu \\
         --topology configs/demo2/topology.yaml \\
@@ -53,7 +59,7 @@ from agentic_ni.distributed.bus import create_bus
 from agentic_ni.distributed.device_tools import DeviceToolkit, MockDeviceToolkit
 from agentic_ni.distributed.message import AgentMessage
 from agentic_ni.distributed.orchestrator import AgentOrchestrator
-from agentic_ni.distributed.syslog_server import SyslogServer
+from agentic_ni.distributed.syslog_server import SyslogFileWatcher, SyslogServer
 from agentic_ni.logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -97,11 +103,11 @@ def _make_human_handler(shutdown_event: asyncio.Event):
 # ステータス表示
 # ---------------------------------------------------------------------------
 
-def _print_status(orchestrator: AgentOrchestrator, syslog_port: int) -> None:
+def _print_status(orchestrator: AgentOrchestrator, syslog_source: str) -> None:
     print(f"\n{_c(_BOLD, '=' * 60)}")
     print(_c(_BOLD + _GREEN, "  agentic-ni-ubuntu: エージェント起動完了"))
     print(_c(_BOLD, "=" * 60))
-    print(f"  SYSLOG 受信ポート : UDP {syslog_port}")
+    print(f"  SYSLOG ソース     : {syslog_source}")
     print(f"  稼働エージェント  : {orchestrator.agent_count()} 台")
     for agent_id, agent in orchestrator.get_all_agents().items():
         neighbors = list(agent._memory.neighbor_map.keys())
@@ -124,9 +130,14 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "例:\n"
-            "  sudo agentic-ni-ubuntu \\\n"
+            "  # ファイル監視（デフォルト、root 権限不要）\n"
+            "  agentic-ni-ubuntu \\\n"
             "      --topology configs/demo2/topology.yaml \\\n"
             "      --testbed testbed.yaml\n\n"
+            "  # UDP 直接受信（root 権限が必要）\n"
+            "  sudo agentic-ni-ubuntu \\\n"
+            "      --topology configs/demo2/topology.yaml \\\n"
+            "      --syslog-file '' --testbed testbed.yaml\n\n"
             "  # テスト（モックツール + 非特権ポート）\n"
             "  agentic-ni-ubuntu \\\n"
             "      --topology configs/demo2/topology.yaml \\\n"
@@ -157,6 +168,13 @@ def main() -> None:
     parser.add_argument(
         "--syslog-port", type=int, default=514,
         help="SYSLOG リッスンポート（デフォルト: 514。1024以下は root 権限が必要）",
+    )
+    parser.add_argument(
+        "--syslog-file", default="/var/log/network-syslog.log",
+        help=(
+            "rsyslog が書き出したログファイルのパス（デフォルト: /var/log/network-syslog.log）。"
+            "root 権限不要。UDP 直接受信に切り替える場合は --syslog-file '' を指定。"
+        ),
     )
     parser.add_argument(
         "--bus", default="memory", choices=["memory", "mqtt", "nats"],
@@ -219,17 +237,22 @@ async def _async_main(args: Any) -> None:
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
-    # SYSLOG サーバー
-    syslog_server = SyslogServer(
-        orchestrator=orchestrator,
-        host=args.syslog_host,
-        port=args.syslog_port,
-    )
+    # SYSLOG ソース（ファイル監視 or UDP 直接受信）
+    if args.syslog_file:
+        syslog_source = SyslogFileWatcher(orchestrator=orchestrator, path=args.syslog_file)
+        syslog_source_str = f"ファイル {args.syslog_file}"
+    else:
+        syslog_source = SyslogServer(
+            orchestrator=orchestrator,
+            host=args.syslog_host,
+            port=args.syslog_port,
+        )
+        syslog_source_str = f"UDP {args.syslog_port}"
 
     try:
         await orchestrator.start_from_topology(args.topology)
-        await syslog_server.start()
-        _print_status(orchestrator, args.syslog_port)
+        await syslog_source.start()
+        _print_status(orchestrator, syslog_source_str)
 
         await asyncio.gather(
             orchestrator.run_approval_loop(shutdown_event),
@@ -237,7 +260,7 @@ async def _async_main(args: Any) -> None:
         )
 
     finally:
-        await syslog_server.stop()
+        await syslog_source.stop()
         await orchestrator.stop_all()
         await bus.close()
         print(_c(_GREEN, "  シャットダウン完了。"))

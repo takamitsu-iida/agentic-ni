@@ -76,6 +76,7 @@ nodes:
       service timestamps log datetime msec
       logging host 192.168.100.1
       logging trap informational
+      logging origin-id hostname
       !
       ip route 192.168.100.0 255.255.255.252 10.1.11.2
       !
@@ -153,6 +154,7 @@ nodes:
       service timestamps log datetime msec
       logging host 192.168.100.1
       logging trap informational
+      logging origin-id hostname
       !
       ip route 192.168.100.0 255.255.255.252 10.2.11.2
       !
@@ -232,6 +234,7 @@ nodes:
       service timestamps log datetime msec
       logging host 192.168.100.1
       logging trap informational
+      logging origin-id hostname
       !
       interface Loopback0
        ip address 10.0.0.11 255.255.255.255
@@ -308,6 +311,7 @@ nodes:
       service timestamps log datetime msec
       logging host 192.168.100.1
       logging trap informational
+      logging origin-id hostname
       !
       ip route 192.168.100.0 255.255.255.252 10.1.12.1
       !
@@ -373,6 +377,7 @@ nodes:
       service timestamps log datetime msec
       logging host 192.168.100.1
       logging trap informational
+      logging origin-id hostname
       !
       ip route 192.168.100.0 255.255.255.252 10.1.13.1
       !
@@ -421,9 +426,9 @@ nodes:
         type: physical
 
   # ── Ubuntu エージェントノード ─────────────────────────────────
-  # ens2: Leaf1 との管理セグメント (192.168.100.1/30) — SYSLOG 受信 + SSH
-  # ens3: external-connector — DHCP で Internet (LLM API) アクセス
-  # ens4: HyperV ホスト接続 (ホストからの SSH 接続用)
+  # ens2: Leaf1 との管理セグメント (192.168.100.1/30)
+  # ens3: external-connector — Internetアクセス (DHCPでアドレス取得)
+  # ens4: HyperV ホスト接続 (192.168.0.100/24)
   - id: "n5"
     label: "Ubuntu"
     node_definition: "ubuntu"
@@ -485,11 +490,26 @@ nodes:
                   addresses:
                     - 192.168.0.100/24
 
+        - path: /etc/rsyslog.d/10-network-devices.conf
+          permissions: "0644"
+          content: |
+            # ネットワーク装置からの SYSLOG を UDP 514 で受信してファイルに書き出す
+            module(load="imudp")
+            input(type="imudp" port="514")
+            template(name="NetworkDeviceRaw" type="string" string="%rawmsg%\n")
+            if $fromhost-ip != "127.0.0.1" then {
+                *.* action(type="omfile" file="/var/log/network-syslog.log" template="NetworkDeviceRaw" fileCreateMode="0644")
+            }
+
       runcmd:
         - netplan apply
         # ens3 (DHCP) 経由でデフォルトルートが確立してからパッケージをインストール
         - apt-get update -y
-        - DEBIAN_FRONTEND=noninteractive apt-get install -y jq yq libxml2-utils curl wget git zip unzip make python3-pip python3-venv direnv
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y jq yq libxml2-utils curl wget git zip unzip make python3-pip python3-venv direnv iptables-persistent rsyslog
+        # rsyslog: ネットワーク装置 SYSLOG をファイルに記録（agentic-ni-ubuntu をroot 権限なしで起動可能）
+        - touch /var/log/network-syslog.log
+        - chmod 644 /var/log/network-syslog.log
+        - systemctl restart rsyslog
         - curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
         - git clone https://github.com/takamitsu-iida/agentic-ni.git /home/cisco/agentic-ni
         - git -C /home/cisco/agentic-ni checkout feature/trouble-shooting
@@ -541,6 +561,12 @@ nodes:
         # IP forwarding
         - sysctl -w net.ipv4.ip_forward=1
         - echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ip-forward.conf
+
+        # NAT: ens2 (管理セグメント) → ens3 (Internet) MASQUERADE
+        - iptables -t nat -A POSTROUTING -o ens3 -j MASQUERADE
+        - iptables -A FORWARD -i ens2 -o ens3 -j ACCEPT
+        - iptables -A FORWARD -i ens3 -o ens2 -m state --state RELATED,ESTABLISHED -j ACCEPT
+        - netfilter-persistent save
 
         # Disable AppArmor
         - systemctl stop apparmor.service

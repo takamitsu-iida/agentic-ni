@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agentic_ni.logger import get_logger
@@ -45,6 +46,20 @@ _RFC3164_RE = re.compile(
     r"(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})"  # timestamp
     r"\s+(\S+)"                                # hostname
     r"\s+(.+)$",                               # message
+    re.DOTALL,
+)
+
+# Cisco IOS 独自形式 (logging origin-id hostname 有効時):
+# <priority>seq: hostname: [*]timestamp: message
+# 例: <189>38: Leaf1: *Aug 11 05:37:33.194: %LINEPROTO-5-UPDOWN: ...
+_CISCO_IOS_RE = re.compile(
+    r"^<(\d{1,3})>"                                       # <priority>
+    r"\d+:\s+"                                            # seq_no:
+    r"(\S+):\s+"                                          # hostname:
+    r"[*.]?"                                              # optional * (時刻未同期マーク)
+    r"(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)"  # timestamp (小数点以下も許容)
+    r":\s+"                                               # :
+    r"(.+)$",                                             # message
     re.DOTALL,
 )
 
@@ -92,6 +107,22 @@ def parse_rfc3164(data: bytes) -> ParsedSyslog | None:
             severity=severity,
             severity_name=_SEVERITY_NAMES[severity] if severity < 8 else "unknown",
             timestamp_str=m.group(2),
+            message=m.group(4),
+        )
+
+    # Cisco IOS 形式: <priority>seq: hostname: [*]timestamp: message
+    m = _CISCO_IOS_RE.match(raw)
+    if m:
+        priority = int(m.group(1))
+        facility = priority >> 3
+        severity = priority & 0x07
+        return ParsedSyslog(
+            raw=raw,
+            source_hostname=m.group(2),
+            facility=facility,
+            severity=severity,
+            severity_name=_SEVERITY_NAMES[severity] if severity < 8 else "unknown",
+            timestamp_str=m.group(3),
             message=m.group(4),
         )
 
@@ -185,6 +216,95 @@ class SyslogServer:
         logger.info(
             "SYSLOG受信 [%s] %s: %s",
             addr[0], parsed.source_hostname, parsed.message[:100],
+        )
+        await self._orchestrator.broadcast_syslog_to_all(
+            source_hostname=parsed.source_hostname,
+            raw_msg=parsed.message,
+            severity=parsed.severity_name,
+        )
+
+
+# ---------------------------------------------------------------------------
+# SyslogFileWatcher
+# ---------------------------------------------------------------------------
+
+class SyslogFileWatcher:
+    """rsyslog が書き出したログファイルを tail -F して SyslogEvent を配布する。
+
+    UDP ポートを直接バインドしないため root 権限が不要。
+    ログローテーション（inode 変化）にも対応。
+
+    Args:
+        orchestrator:   SyslogEvent をブロードキャストする先の AgentOrchestrator。
+        path:           監視対象のログファイルパス。
+        poll_interval:  新着行のポーリング間隔（秒）。
+    """
+
+    def __init__(
+        self,
+        orchestrator: "AgentOrchestrator",
+        path: str,
+        poll_interval: float = 0.5,
+    ) -> None:
+        self._orchestrator = orchestrator
+        self._path = Path(path)
+        self._poll_interval = poll_interval
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        self._task = asyncio.create_task(
+            self._tail_loop(), name="syslog-file-watcher"
+        )
+        logger.info("SyslogFileWatcher: %s の監視開始", self._path)
+
+    async def stop(self) -> None:
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("SyslogFileWatcher: 停止しました。")
+
+    async def _tail_loop(self) -> None:
+        while not self._path.exists():
+            logger.debug("SyslogFileWatcher: ファイル待機中: %s", self._path)
+            await asyncio.sleep(self._poll_interval)
+
+        inode = self._path.stat().st_ino
+        fp = open(self._path, "r", encoding="utf-8", errors="replace")  # noqa: SIM115
+        fp.seek(0, 2)  # 起動前のログをスキップ
+
+        try:
+            while True:
+                line = fp.readline()
+                if line:
+                    await self._dispatch(line.rstrip("\n\r"))
+                    continue
+
+                await asyncio.sleep(self._poll_interval)
+                try:
+                    new_inode = self._path.stat().st_ino
+                except FileNotFoundError:
+                    continue
+                if new_inode != inode:
+                    fp.close()
+                    fp = open(self._path, "r", encoding="utf-8", errors="replace")  # noqa: SIM115
+                    inode = new_inode
+                    logger.info("SyslogFileWatcher: ログローテーション検知、再オープン")
+        finally:
+            fp.close()
+
+    async def _dispatch(self, line: str) -> None:
+        if not line:
+            return
+        parsed = parse_rfc3164(line.encode())
+        if parsed is None:
+            logger.debug("SyslogFileWatcher: パース失敗: %r", line[:80])
+            return
+        logger.info(
+            "SYSLOG受信 [file] %s: %s",
+            parsed.source_hostname, parsed.message[:100],
         )
         await self._orchestrator.broadcast_syslog_to_all(
             source_hostname=parsed.source_hostname,
