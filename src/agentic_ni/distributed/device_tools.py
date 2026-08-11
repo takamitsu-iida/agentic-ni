@@ -137,7 +137,7 @@ class DeviceToolkit:
             """全インターフェースの状態一覧（up/down, speed 等）を取得して返す。"""
             _assert_testbed(testbed_yaml, device_name)
             from agentic_ni.tools.pyats_tools import run_show_command
-            result = run_show_command(testbed_yaml, device_name, "show interfaces brief")
+            result = run_show_command(testbed_yaml, device_name, "show ip interface brief")
             return result.get("raw_output", json.dumps(result, ensure_ascii=False))
 
         return StructuredTool.from_function(

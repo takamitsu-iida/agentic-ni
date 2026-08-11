@@ -39,6 +39,13 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# pyATS 接続時に機器が自動生成するノイズ syslog を抑制するパターン群
+# これらは障害調査と無関係なため画面表示・ブロードキャストの対象外とする
+_PYATS_NOISE_PATTERNS = (
+    "%SYS-5-CONFIG_I",
+    "%SYS-5-LOG_CONFIG_CHANGE",
+)
+
 # RFC 3164: <priority>timestamp hostname message
 # 例: <190>Aug 10 12:34:56 R1 %OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 to DOWN
 _RFC3164_RE = re.compile(
@@ -213,6 +220,9 @@ class SyslogServer:
 
     async def _on_syslog(self, parsed: ParsedSyslog, addr: tuple) -> None:
         """受信した SYSLOG をパースして全エージェントにブロードキャストする。"""
+        if any(pat in parsed.message for pat in _PYATS_NOISE_PATTERNS):
+            logger.debug("SYSLOG抑制 [%s] %s: %s", addr[0], parsed.source_hostname, parsed.message[:100])
+            return
         logger.info(
             "SYSLOG受信 [%s] %s: %s",
             addr[0], parsed.source_hostname, parsed.message[:100],
@@ -301,6 +311,9 @@ class SyslogFileWatcher:
         parsed = parse_rfc3164(line.encode())
         if parsed is None:
             logger.debug("SyslogFileWatcher: パース失敗: %r", line[:80])
+            return
+        if any(pat in parsed.message for pat in _PYATS_NOISE_PATTERNS):
+            logger.debug("SYSLOG抑制 [file] %s: %s", parsed.source_hostname, parsed.message[:100])
             return
         logger.info(
             "SYSLOG受信 [file] %s: %s",
