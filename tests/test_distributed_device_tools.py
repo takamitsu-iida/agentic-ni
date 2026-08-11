@@ -201,7 +201,7 @@ class TestCreateDeviceToolkit:
 
 class TestDeviceAgentWithTools:
     async def test_tool_call_then_final_response(self):
-        """LLM が run_show を呼び出し → 結果を受け取り → バスに応答を送ること。"""
+        """LLM が run_show を呼び出し → 結果を受け取り → COORDINATOR に応答を送ること。"""
         human_q: asyncio.Queue = asyncio.Queue()
         bus = InMemoryBus()
         memory = DeviceMemory("R1")
@@ -213,8 +213,8 @@ class TestDeviceAgentWithTools:
         llm = _ToolCallingMockLLM([
             # ターン 1: run_show を呼び出す
             {"name": "run_show", "args": {"command": "show ip ospf neighbor"}, "id": "call_1"},
-            # ターン 2: ツール結果を受け取って最終応答
-            "TO: Agent-R2 | MSG: OSPF ネイバーは正常 (FULL/DR)。問題は R1 にはありません。",
+            # ターン 2: ツール結果を受け取って COORDINATOR に最終報告（Worker モード）
+            "TO: COORDINATOR | MSG: OSPF ネイバーは正常 (FULL/DR)。問題は R1 にはありません。",
         ])
         agent = DeviceAgent(
             device_name="R1",
@@ -226,17 +226,15 @@ class TestDeviceAgentWithTools:
             human_queue=human_q,
         )
 
-        received: list[AgentMessage] = []
-        await bus.subscribe("network/agents/Agent-R2/direct", lambda t, m: received.append(m) or asyncio.sleep(0))
-
         await agent.start()
         await agent.inject_event(SyslogEvent(raw_text="OSPF ネイバー確認依頼"))
         await agent.wait_idle()
         await agent.stop()
 
         assert llm.call_count == 2
-        assert len(received) == 1
-        assert "FULL/DR" in received[0].content
+        assert not human_q.empty()
+        item = human_q.get_nowait()
+        assert "FULL/DR" in item["content"]
 
     async def test_tool_result_stored_in_memory(self):
         """ツール実行結果がエージェントのメモリに記録されること。"""

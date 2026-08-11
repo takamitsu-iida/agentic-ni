@@ -180,87 +180,49 @@ async def _setup_orchestrator(
 class TestScenarioA_LinkDown:
     async def test_full_flow(self, tmp_path: Path):
         """
-        シナリオ A: R1 がリンク断 syslog を受信
-          1. R1: run_show "show interfaces brief" → I/F DOWN を確認
-          2. R1 → Agent-R2: 「GigabitEthernet0/0 がダウン。確認してください」
-          3. R2: run_show "show interfaces brief" → こちらも DOWN
-          4. R2 → Agent-R1: 「こちらも DOWN。物理リンク障害の可能性あり」
-          5. R1 → HUMAN: 診断レポートを送信
+        新フロー: receive_syslog → Correlator → Coordinator → execute_query ×2 → RCA → human_queue
         """
-        r1_llm = _SequenceLLM([
-            # ターン 1: ツール呼び出し
-            {"name": "get_interface_status", "args": {}, "id": "r1_c1"},
-            # ターン 2: R2 に問い合わせ
-            "TO: Agent-R2 | MSG: R1 の GigabitEthernet0/0 が DOWN です。そちらの状態を確認してください。",
-            # ターン 3: R2 からの応答を受けて HUMAN エスカレーション
-            (
-                "TO: HUMAN | MSG: 【障害診断レポート】\n"
-                "- 症状: R1-R2 間リンク断\n"
-                "- 根本原因: 物理リンク障害（双方の GigabitEthernet0/0 が DOWN）\n"
-                "- 影響範囲: R1-R2 間の全通信\n"
-                "- 推奨対応: ケーブルまたは物理ポートの確認を実施してください"
-            ),
-        ], name="R1")
-
-        r2_llm = _SequenceLLM([
-            # ターン 1: R1 からの問い合わせを受けてツール呼び出し
-            {"name": "get_interface_status", "args": {}, "id": "r2_c1"},
-            # ターン 2: R1 に報告
-            "TO: Agent-R1 | MSG: R2 の GigabitEthernet0/0 も DOWN です。物理リンク障害の可能性があります。",
-        ], name="R2")
+        r1_llm = _SequenceLLM(
+            ["TO: COORDINATOR | MSG: R1 の Gi0/0 が down/down。物理リンク障害の疑い。"],
+            name="R1",
+        )
+        r2_llm = _SequenceLLM(
+            ["TO: COORDINATOR | MSG: R2 の Gi0/0 が down/down。リンク断を確認。"],
+            name="R2",
+        )
+        coordinator_llm = _SequenceLLM([
+            "FINAL_REPORT:\n"
+            "- 症状: R1-R2 間リンクダウン\n"
+            "- 根本原因: 物理ケーブル障害\n"
+            "- 影響範囲: R1-R2 間の全通信\n"
+            "- 推奨対応:\n"
+            "  1. ケーブルを確認してください"
+        ])
 
         orch, bus, recorder = await _setup_orchestrator(
-            _P2P_TOPO,
-            {"R1": r1_llm, "R2": r2_llm},
-            mock_show={
-                "R1": {"show interfaces brief": "GigabitEthernet0/0  admin down  down\n"},
-                "R2": {"show interfaces brief": "GigabitEthernet0/0  admin down  down\n"},
-            },
-            tmp_path=tmp_path,
+            _P2P_TOPO, {"R1": r1_llm, "R2": r2_llm}, tmp_path=tmp_path
         )
+        orch._coordinator._llm = coordinator_llm
 
-        # 完了検知: HUMAN メッセージを受信したらセット
-        human_received = asyncio.Event()
-        original_put = orch.human_queue.put_nowait
-
-        def _tracking_put(item):
-            original_put(item)
-            human_received.set()
-
-        orch.human_queue.put_nowait = _tracking_put
-
-        # R1 に syslog イベントを注入
-        r1 = orch.get_agent("Agent-R1")
-        await r1.inject_event(SyslogEvent(
-            raw_text="%LINK-3-UPDOWN: Interface GigabitEthernet0/0, changed state to down",
-            severity="3",
-        ))
-
-        # HUMAN メッセージが来るまで最大 3 秒待機
-        try:
-            await asyncio.wait_for(human_received.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
-            pytest.fail("HUMAN エスカレーションがタイムアウトしました")
+        await orch.receive_syslog(
+            "R1", "%LINK-3-UPDOWN: Interface GigabitEthernet0/0, changed state to down"
+        )
+        await orch.receive_syslog(
+            "R2", "%LINK-3-UPDOWN: Interface GigabitEthernet0/0, changed state to down"
+        )
+        # Correlator を即時フラッシュして Incident を発火
+        await orch._correlator.flush_all()
+        await asyncio.sleep(0.3)
 
         await orch.stop_all()
         await recorder.stop()
         await bus.close()
 
-        # ---- 検証 ----
-        # R1 が R2 に問い合わせを送ったこと
-        bus_msgs = [msg for _, msg in recorder.get_log()]
-        r1_to_r2 = [m for m in bus_msgs if m.from_agent == "Agent-R1" and m.to_agent == "Agent-R2"]
-        assert len(r1_to_r2) >= 1, "R1 → R2 の問い合わせが記録されていません"
-
-        # R2 が R1 に応答を返したこと
-        r2_to_r1 = [m for m in bus_msgs if m.from_agent == "Agent-R2" and m.to_agent == "Agent-R1"]
-        assert len(r2_to_r1) >= 1, "R2 → R1 の応答が記録されていません"
-
-        # HUMAN エスカレーションが発生したこと
-        assert not orch.human_queue.empty() or human_received.is_set()
-        human_item = orch.human_queue.get_nowait()
-        assert human_item["from_agent"] == "Agent-R1"
-        assert "障害診断レポート" in human_item["content"]
+        assert not orch.human_queue.empty(), "RCA レポートが human_queue に屁きませんでした"
+        report = orch.human_queue.get_nowait()
+        assert report["type"] == "rca_report"
+        assert "FINAL_REPORT" in report["content"]
+        assert "R1" in report["affected_devices"] or "R2" in report["affected_devices"]
 
     async def test_r1_tool_result_stored_in_memory(self, tmp_path: Path):
         """R1 のツール呼び出し結果がメモリに記録されること。"""
@@ -293,64 +255,51 @@ class TestScenarioA_LinkDown:
 class TestScenarioB_OspfDown:
     async def test_three_agent_coordination(self, tmp_path: Path):
         """
-        シナリオ B: R1 が OSPF ネイバー消失を検知
-          1. R1: OSPF 調査ツール呼び出し → ネイバーなし確認
-          2. R1 → ALL: 「OSPF ネイバーが消失。全エージェントは自装置の OSPF 状態を確認してください」
-          3. R2/R3: 自装置の OSPF 状態を確認して R1 に応答
-          4. R1 → HUMAN: 影響範囲と診断を報告
+        新フロー: OSPF SYSLOG を2台から受信 → Correlatorが1 Incidentに束ねる
+        → Coordinator が両エージェントに execute_query → RCA レポート
         """
-        r1_llm = _SequenceLLM([
-            {"name": "run_show", "args": {"command": "show ip ospf neighbor"}, "id": "r1_c1"},
-            "TO: ALL | MSG: R1 の OSPF ネイバーが全て消失しました。各エージェントは OSPF 状態を確認してください。",
-            "TO: HUMAN | MSG: OSPF 全ネイバー消失を検知。R1 の OSPF プロセス再起動またはネットワーク設定ミスの可能性があります。",
-        ], name="R1")
-
-        r2_llm = _SequenceLLM([
-            {"name": "run_show", "args": {"command": "show ip ospf neighbor"}, "id": "r2_c1"},
-            "TO: Agent-R1 | MSG: R2 の OSPF ネイバーも消失しています。",
-        ], name="R2")
-
-        r3_llm = _SequenceLLM([
-            {"name": "run_show", "args": {"command": "show ip ospf neighbor"}, "id": "r3_c1"},
-            "TO: Agent-R1 | MSG: R3 の OSPF ネイバーも消失しています。",
-        ], name="R3")
+        r1_llm = _SequenceLLM(
+            ["TO: COORDINATOR | MSG: R1 の OSPF ネイバーが全消失。プロセス専用メモリ榴溈の可能。"],
+            name="R1",
+        )
+        r2_llm = _SequenceLLM(
+            ["TO: COORDINATOR | MSG: R2 でも OSPF ネイバーが消失。対向リンクがダウンしている。"],
+            name="R2",
+        )
+        coordinator_llm = _SequenceLLM([
+            "FINAL_REPORT:\n"
+            "- 症状: R1-R2 間 OSPF ネイバー全消失\n"
+            "- 根本原因: 物理リンク障害による OSPF セッション断\n"
+            "- 影響範囲: R1-R2 間のルーティング\n"
+            "- 推奨対応:\n"
+            "  1. 物理リンクを確認してください"
+        ])
 
         orch, bus, recorder = await _setup_orchestrator(
-            _TRIANGLE_TOPO,
-            {"R1": r1_llm, "R2": r2_llm, "R3": r3_llm},
-            tmp_path=tmp_path,
+            _P2P_TOPO, {"R1": r1_llm, "R2": r2_llm}, tmp_path=tmp_path
         )
+        orch._coordinator._llm = coordinator_llm
 
-        human_received = asyncio.Event()
-        original_put = orch.human_queue.put_nowait
-
-        def _tracking_put(item):
-            original_put(item)
-            human_received.set()
-
-        orch.human_queue.put_nowait = _tracking_put
-
-        r1 = orch.get_agent("Agent-R1")
-        await r1.inject_event(SyslogEvent(
-            raw_text="%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 on GigabitEthernet0/0 from FULL to DOWN",
-        ))
-
-        try:
-            await asyncio.wait_for(human_received.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            pytest.fail("HUMAN エスカレーションがタイムアウトしました")
+        # R1/R2 両方から OSPF SYSLOG を送信—同一 Gi0/0 リンクに属するので 1 Incident
+        await orch.receive_syslog(
+            "R1",
+            "%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 on GigabitEthernet0/0 from FULL to DOWN",
+        )
+        await orch.receive_syslog(
+            "R2",
+            "%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.1 on GigabitEthernet0/0 from FULL to DOWN",
+        )
+        await orch._correlator.flush_all()
+        await asyncio.sleep(0.3)
 
         await orch.stop_all()
         await recorder.stop()
         await bus.close()
 
-        bus_msgs = [msg for _, msg in recorder.get_log()]
-        # R1 がブロードキャストを送ったこと
-        broadcasts = [m for m in bus_msgs if m.from_agent == "Agent-R1" and m.to_agent == "ALL"]
-        assert len(broadcasts) >= 1
-
-        # HUMAN に診断レポートが届いたこと
-        assert human_received.is_set()
+        assert not orch.human_queue.empty(), "RCA レポートが屑きませんでした"
+        report = orch.human_queue.get_nowait()
+        assert report["type"] == "rca_report"
+        assert "FINAL_REPORT" in report["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +406,7 @@ class TestSystemPrompt:
             "あなたの役割",
             "行動指針",
             "出力フォーマット",
-            "エスカレーション条件",
+            "調査完了条件",
             "TO:",
         ]
         for section in required_sections:

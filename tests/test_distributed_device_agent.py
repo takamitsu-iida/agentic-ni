@@ -12,7 +12,6 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from agentic_ni.distributed.bus import InMemoryBus
 from agentic_ni.distributed.device_agent import (
-    BusMessageEvent,
     DeviceAgent,
     PollEvent,
     SyslogEvent,
@@ -20,8 +19,8 @@ from agentic_ni.distributed.device_agent import (
     _event_summary,
     parse_agent_output,
 )
+from agentic_ni.distributed.incident import DeviceQueryRequest, DeviceQueryResponse
 from agentic_ni.distributed.memory import DeviceMemory, NeighborInfo
-from agentic_ni.distributed.message import AgentMessage
 from agentic_ni.distributed.prompts import build_device_prompt
 
 
@@ -193,168 +192,126 @@ class TestEventHelpers:
         ev = SyslogEvent(raw_text="%LINK-3-UPDOWN: GigabitEthernet0/0, changed state to down")
         assert "SYSLOG" in _event_summary(ev)
 
-    def test_bus_event_summary(self):
-        msg = AgentMessage(
-            from_agent="Agent-R2", to_agent="Agent-R1",
-            msg_type="query", content="BGP セッション断",
-        )
-        ev = BusMessageEvent(message=msg)
-        assert "Agent-R2" in _event_summary(ev)
-
     def test_poll_event_summary(self):
         ev = PollEvent(source="run_show", content="show ip ospf neighbor\n...")
         assert "POLL" in _event_summary(ev)
 
     def test_event_source_tags(self):
         assert _event_source(SyslogEvent(raw_text="x")) == "syslog"
-        assert _event_source(BusMessageEvent(
-            message=AgentMessage(from_agent="A", to_agent="B", msg_type="alert", content="x")
-        )) == "bus"
         assert _event_source(PollEvent(source="show", content="x")) == "poll"
 
 
 # ---------------------------------------------------------------------------
-# DeviceAgent の統合テスト（MockLLM 使用）
+# DeviceAgent.execute_query のテスト
 # ---------------------------------------------------------------------------
 
-class TestDeviceAgentIntegration:
-    async def test_syslog_triggers_llm_and_routes_to_bus(self):
-        """syslog イベントが LLM を起動し、バスへメッセージを Publish すること。"""
+class TestExecuteQuery:
+    async def test_execute_query_returns_response(self):
+        """execute_query が DeviceQueryResponse を返すこと。"""
         agent, bus, llm = _make_agent(
-            ["TO: Agent-R2 | MSG: インターフェースダウンを検知。状態を確認してください。"]
+            ["TO: COORDINATOR | MSG: Gi0/2 は down 状態です。BGP ネイバー消失を確認しました。"]
         )
-        received: list[AgentMessage] = []
-
-        async def capture(topic, msg):
-            received.append(msg)
-
-        await bus.subscribe("network/agents/Agent-R2/direct", capture)
         await agent.start()
-
-        await agent.inject_event(SyslogEvent(
-            raw_text="%LINK-3-UPDOWN: GigabitEthernet0/0, changed state to down",
-            severity="3",
-        ))
-        await agent.wait_idle()
+        req = DeviceQueryRequest(
+            incident_id="test-incident-id",
+            target_device="R1",
+            symptom_summary="Spine1-Leaf3 間リンクダウン症状。Gi0/2 確認を依頼。",
+        )
+        resp = await agent.execute_query(req)
         await agent.stop()
 
-        assert llm.call_count == 1
-        assert len(received) == 1
-        assert received[0].from_agent == "Agent-R1"
-        assert received[0].to_agent == "Agent-R2"
+        assert isinstance(resp, DeviceQueryResponse)
+        assert resp.incident_id == "test-incident-id"
+        assert resp.from_device == "R1"
+        assert "down" in resp.findings
+        assert not resp.error
 
-    async def test_human_escalation_goes_to_queue(self):
-        """HUMAN 宛メッセージが human_queue に積まれること。"""
+    async def test_execute_query_with_tool_calls(self):
+        """execute_query で LLM がツール呼び出しをした後に結果を返すこと。"""
+        tool_call_item = {"name": "run_show", "args": {"command": "show ip interface brief"}, "id": "c1", "type": "tool_call"}
+
+        class _ToolLLM:
+            def __init__(self):
+                self._step = 0
+            def bind_tools(self, tools):
+                return self
+            async def ainvoke(self, messages):
+                from langchain_core.messages import AIMessage
+                if self._step == 0:
+                    self._step += 1
+                    return AIMessage(content="", tool_calls=[tool_call_item])
+                return AIMessage(content="TO: COORDINATOR | MSG: インターフェースダウンを確認しました")
+
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel, Field as PydanticField
+
+        class _ShowInput(BaseModel):
+            command: str = PydanticField(default="")
+
+        mock_tool = StructuredTool(
+            name="run_show",
+            description="show command",
+            args_schema=_ShowInput,
+            func=lambda command="": "Interface GigabitEthernet0/2 is down",
+        )
+
+        bus = InMemoryBus()
+        memory = DeviceMemory(device_name="R1")
+        agent = DeviceAgent(
+            device_name="R1", agent_id="Agent-R1",
+            bus=bus, memory=memory,
+            llm=_ToolLLM(), tools=[mock_tool],
+        )
+        await agent.start()
+        req = DeviceQueryRequest(
+            incident_id="t2", target_device="R1",
+            symptom_summary="調査依頼",
+        )
+        resp = await agent.execute_query(req)
+        await agent.stop()
+
+        assert not resp.error
+        assert "show ip interface brief" in resp.show_outputs
+        assert "インターフェースダウン" in resp.findings
+
+    async def test_execute_query_llm_error_returns_error_response(self):
+        """LLM エラー時に error=True のレスポンスを返すこと。"""
+        class _ErrorLLM:
+            def bind_tools(self, tools): return self
+            async def ainvoke(self, messages):
+                raise RuntimeError("モックエラー")
+
+        bus = InMemoryBus()
+        memory = DeviceMemory(device_name="R1")
+        agent = DeviceAgent(
+            device_name="R1", agent_id="Agent-R1",
+            bus=bus, memory=memory, llm=_ErrorLLM(),
+        )
+        await agent.start()
+        req = DeviceQueryRequest(
+            incident_id="t3", target_device="R1", symptom_summary="テスト",
+        )
+        resp = await agent.execute_query(req)
+        await agent.stop()
+
+        assert resp.error
+        assert "モックエラー" in resp.error_detail
+
+
+# ---------------------------------------------------------------------------
+# 溌: 旧 inject_event テスト（PollEvent のみ、排他核し）
+# ---------------------------------------------------------------------------
+
+class TestInjectPollEvent:
+    async def test_poll_event_triggers_processing(self):
+        """PollEvent が inject_event でキューに積まれること。"""
         human_q: asyncio.Queue = asyncio.Queue()
         agent, bus, llm = _make_agent(
-            ["TO: HUMAN | MSG: 設定変更が必要です。承認をお願いします。"],
+            ["TO: HUMAN | MSG: ポーリング結果受存"],
             human_queue=human_q,
         )
         await agent.start()
-        await agent.inject_event(SyslogEvent(raw_text="重大障害"))
-        await agent.wait_idle()
-        await agent.stop()
-
-        assert not human_q.empty()
-        item = human_q.get_nowait()
-        assert item["from_agent"] == "Agent-R1"
-        assert "設定変更" in item["content"]
-
-    async def test_broadcast_goes_to_chat_topic(self):
-        """ALL 宛メッセージが network/agents/chat トピックに Publish されること。"""
-        agent, bus, llm = _make_agent(
-            ["TO: ALL | MSG: リンク断を検知しました。"]
-        )
-        received: list[tuple[str, AgentMessage]] = []
-
-        async def capture(topic, msg):
-            received.append((topic, msg))
-
-        await bus.subscribe("network/agents/chat", capture)
-        await agent.start()
-        await agent.inject_event(SyslogEvent(raw_text="リンク断"))
-        await agent.wait_idle()
-        await agent.stop()
-
-        # 自分の送信は _on_bus_message でスキップされるので received に来る
-        assert any(t == "network/agents/chat" for t, _ in received)
-
-    async def test_log_target_updates_memory(self):
-        """LOG 宛メッセージがバスに送信されずメモリに記録されること。"""
-        agent, bus, llm = _make_agent(
-            ["TO: LOG | MSG: インターフェース状態: UP"]
-        )
-        published: list[AgentMessage] = []
-
-        async def capture(topic, msg):
-            published.append(msg)
-
-        await bus.subscribe("network/agents/#", capture)
-        await agent.start()
-        await agent.inject_event(SyslogEvent(raw_text="テスト"))
-        await agent.wait_idle()
-        await agent.stop()
-
-        assert len(published) == 0
-        # メモリのステータス履歴に "llm" ソースのエントリが記録されていること
-        llm_entries = [s for s in agent._memory.status_history if s.source == "llm"]
-        assert len(llm_entries) == 1
-
-    async def test_bus_message_triggers_processing(self):
-        """バス経由のメッセージを受信してイベントとして処理すること。"""
-        agent, bus, llm = _make_agent(
-            ["TO: Agent-SW1 | MSG: 調査結果を報告します。"]
-        )
-        received: list[AgentMessage] = []
-
-        async def capture(topic, msg):
-            received.append(msg)
-
-        await bus.subscribe("network/agents/Agent-SW1/direct", capture)
-        await agent.start()
-
-        # 別エージェントからのメッセージをバスに Publish する
-        incoming = AgentMessage(
-            from_agent="Agent-SW1",
-            to_agent="Agent-R1",
-            msg_type="query",
-            content="ポート状態を教えてください",
-        )
-        await bus.publish(f"network/agents/{agent.agent_id}/direct", incoming)
-        await asyncio.sleep(0.05)  # バスのハンドラー実行を待つ
-        await agent.wait_idle()
-        await agent.stop()
-
-        assert llm.call_count == 1
-        assert len(received) == 1
-
-    async def test_self_message_is_ignored(self):
-        """自分が送ったバスメッセージは LLM を起動しないこと。"""
-        agent, bus, llm = _make_agent(["TO: LOG | MSG: テスト"])
-        await agent.start()
-
-        # 自分の agent_id から送ったメッセージ
-        self_msg = AgentMessage(
-            from_agent="Agent-R1",  # 自分と同じ ID
-            to_agent="ALL",
-            msg_type="alert",
-            content="自己送信テスト",
-        )
-        await bus.publish("network/agents/chat", self_msg)
-        await asyncio.sleep(0.05)
-        await agent.stop()
-
-        assert llm.call_count == 0
-
-    async def test_fallback_response_sent_to_human(self):
-        """フォーマットなし LLM 出力は HUMAN に送られること。"""
-        human_q: asyncio.Queue = asyncio.Queue()
-        agent, bus, llm = _make_agent(
-            ["フォーマットなしの応答テキストです。"],
-            human_queue=human_q,
-        )
-        await agent.start()
-        await agent.inject_event(SyslogEvent(raw_text="テスト"))
+        await agent.inject_event(PollEvent(source="run_show", content="show ip route\n..."))
         await agent.wait_idle()
         await agent.stop()
 

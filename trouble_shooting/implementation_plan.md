@@ -15,6 +15,13 @@
 | TS-5 | プロンプト設計と E2E 検証 | ✅ 完了 | 3 / 3 |
 | Scale-1 | TTL 完全実装 | ✅ 完了 | 4 / 4 |
 | Scale-2 | イベントデデュープ | ✅ 完了 | 4 / 4 |
+| Refactor-1 | データモデル定義（incident.py） | ✅ 完了 | 3 / 3 |
+| Refactor-2 | EventCorrelator（correlator.py） | ✅ 完了 | 3 / 3 |
+| Refactor-3 | IncidentCoordinator（coordinator.py） | ✅ 完了 | 4 / 4 |
+| Refactor-4 | DeviceAgent Worker 化 | ✅ 完了 | 4 / 4 |
+| Refactor-5 | Orchestrator 配線更新 | ✅ 完了 | 3 / 3 |
+| Refactor-6 | システムプロンプト更新 | ✅ 完了 | 2 / 2 |
+| Refactor-7 | テスト更新 | ✅ 完了 | 5 / 5 |
 
 > 凡例: 🔲 未着手 / 🔄 進行中 / ✅ 完了
 
@@ -505,4 +512,318 @@ Scale-2-1
 Scale-1-4 + Scale-2-2 + Scale-2-3（組み込み）
     ↓
 Scale-2-4（テスト）
+
+---
+
+## アーキテクチャ刷新フェーズ（Coordinator + Worker パターン）
+
+> **背景**: DeviceAgent が自律的に並行調査を起動し P2P メッセージで相互に刺激し合う
+> エコーループが発生した（1リンクダウン → 10並行調査）。
+> Coordinator が調査ライフサイクルを一元管理し、DeviceAgent をツール実行者に格下げする。
+
+### 変更対象ファイル一覧
+
+| ファイル | 種別 | 変更内容 |
+|---|---|---|
+| `src/agentic_ni/distributed/incident.py` | 新規 | NetworkIncident / QueryRequest / QueryResponse |
+| `src/agentic_ni/distributed/correlator.py` | 新規 | 複数 SYSLOG → 1 Incident に束ねる |
+| `src/agentic_ni/distributed/coordinator.py` | 新規 | 調査ライフサイクル所有・RCA 判定 |
+| `src/agentic_ni/distributed/device_agent.py` | 大幅削除 | P2P 廃止・execute_query() 追加 |
+| `src/agentic_ni/distributed/orchestrator.py` | 修正 | Correlator / Coordinator を内包 |
+| `prompts/device_agent_system.md` | 修正 | 役割をクエリ応答者に変更 |
+| `tests/test_correlator.py` | 新規 | Correlator ユニットテスト |
+| `tests/test_coordinator.py` | 新規 | Coordinator ユニットテスト |
+| `tests/test_distributed_device_agent.py` | 修正 | execute_query テスト追加・BusMessage テスト削除 |
+| `tests/test_distributed_e2e.py` | 書き直し | 新フロー（correlator→coordinator→agent） |
+| `tests/test_distributed_orchestrator.py` | 修正 | receive_syslog API に更新 |
+
+---
+
+### Phase Refactor-1: データモデル定義　🔲 未着手
+
+**目標**: Coordinator と DeviceAgent 間で交わす構造化データ型を定義する。
+
+**実装ファイル**: `src/agentic_ni/distributed/incident.py`（新規）
+
+#### タスク
+
+- [x] 1. **`NetworkIncident` データクラス**
+   ```python
+   @dataclass
+   class NetworkIncident:
+       incident_id: str           # UUID
+       correlation_key: str       # 例: "link:n0-n4"（topology の node id ベース）
+       affected_devices: list[str]  # hostname リスト（例: ["Spine1", "Leaf3"]）
+       syslog_events: list[str]   # 束ねた生 SYSLOG テキスト
+       created_at: float          # time.monotonic()
+   ```
+
+- [x] 2. **`DeviceQueryRequest` / `DeviceQueryResponse` データクラス**
+   ```python
+   @dataclass
+   class DeviceQueryRequest:
+       incident_id: str
+       target_device: str
+       symptom_summary: str   # 「Spine1-Leaf3 間リンクダウン疑い」等
+
+   @dataclass
+   class DeviceQueryResponse:
+       incident_id: str
+       from_device: str
+       findings: str              # LLM が整理した調査結果サマリー
+       show_outputs: dict[str, str]  # command → raw output
+   ```
+
+- [x] 3. **`IncidentStatus` Literal 型**
+   ```python
+   IncidentStatus = Literal["open", "investigating", "resolved", "duplicate"]
+   ```
+
+**完了条件**: 型チェックエラーなしで import できること。
+
+---
+
+### Phase Refactor-2: EventCorrelator　🔲 未着手
+
+**目標**: 同一リンクダウン由来の複数 SYSLOG を 1 つの `NetworkIncident` に束ねる。
+
+**実装ファイル**: `src/agentic_ni/distributed/correlator.py`（新規）
+
+#### タスク
+
+- [x] 1. **相関キー抽出（ルールベース・LLM 不要）**
+
+   topology の node id ペアをキーとして使用する。
+   SYSLOG テキストから装置名・インターフェース名・ネイバー IP を抽出し、
+   topology のリンク情報と照合して `"link:{n1_id}-{n2_id}"` 形式のキーを生成する。
+
+   ```python
+   # 例
+   # "Spine1: %LINEPROTO ... GigabitEthernet0/2" → Spine1 の i2 → Leaf3 の n4 → "link:n0-n4"
+   # "Leaf3: %BGP ... Neighbor 10.1.13.1"       → 同一リンク → "link:n0-n4"
+   # キー抽出できない場合は "device:{hostname}" にフォールバック
+   ```
+
+- [x] 2. **時間窓バッファ（5 秒）**
+
+   ```python
+   class EventCorrelator:
+       def __init__(self, topology_data: dict, window_seconds: float = 5.0,
+                    on_incident: Callable[[NetworkIncident], Awaitable[None]] | None = None)
+       async def receive_syslog(self, hostname: str, raw_text: str) -> None
+       async def _flush_expired(self) -> None  # 窓が閉じた Incident を on_incident に渡す
+   ```
+
+- [x] 3. **ユニットテスト** `tests/test_correlator.py`（新規）
+   - 5 秒以内の Spine1 + Leaf3 の SYSLOG 群 → 1 Incident にまとまること
+   - 6 秒後の SYSLOG → 別 Incident として発火すること
+   - 相関キー抽出できない SYSLOG → `"device:{hostname}"` キーで単独 Incident になること
+
+**完了条件**: テストが全件パスし、上記ログのケースで Incident 数が 10 → 1 になること。
+
+---
+
+### Phase Refactor-3: IncidentCoordinator　🔲 未着手
+
+**目標**: インシデントの調査ライフサイクルを一元管理し、RCA レポートを生成する。
+
+**実装ファイル**: `src/agentic_ni/distributed/coordinator.py`（新規）
+
+#### タスク
+
+- [x] 1. **インシデント重複抑制**
+
+   同一 `correlation_key` が 60 秒以内にオープン中なら後続を破棄する。
+
+   ```python
+   class IncidentCoordinator:
+       def __init__(self, agent_registry: dict[str, DeviceAgent], llm, human_queue)
+       async def handle_incident(self, incident: NetworkIncident) -> None
+       def _is_duplicate(self, correlation_key: str) -> bool
+   ```
+
+- [x] 2. **2ラウンド調査ループ**
+
+   ```
+   Round 1: affected_devices 全台に QueryRequest を asyncio.gather で並列発行
+   Round 2: LLM が「追加情報必要」と判定した場合のみ追加デバイスに発行（最大1ラウンド）
+   完了宣言: RCA レポートを human_queue へ送信し Incident をクローズ
+   ```
+
+- [x] 3. **RCA 判定プロンプト**
+
+   全 `DeviceQueryResponse` を集約して LLM に渡し、
+   「症状 / 根本原因 / 影響範囲 / 推奨対応」を含む構造化レポートを生成する。
+
+- [x] 4. **ユニットテスト** `tests/test_coordinator.py`（新規）
+   - 正常系: 2台のレスポンスを集約して HUMAN レポートが生成されること
+   - 重複抑制: 同一キーの Incident が 60 秒以内に来た場合スキップされること
+   - タイムアウト: DeviceAgent が無応答の場合も完了宣言されること
+
+**完了条件**: Mock DeviceAgent を使い、Incident 1件から RCA レポートが 1件生成されること。
+
+---
+
+### Phase Refactor-4: DeviceAgent Worker 化　🔲 未着手
+
+**目標**: DeviceAgent から自律調査・P2P 通信を削除し、クエリ応答者に変える。
+
+**実装ファイル**: `src/agentic_ni/distributed/device_agent.py`
+
+#### タスク
+
+- [x] 1. **削除する機能**
+
+   | 削除対象 | 理由 |
+   |---|---|
+   | `BusMessageEvent` クラス | P2P 廃止 |
+   | `_on_bus_message()` / bus.subscribe("chat") | P2P 廃止 |
+   | `_investigating` フラグ | Coordinator が制御するため不要 |
+   | `_chain_dedup` | エコーループが構造的に消えるため不要 |
+   | `_route_output()` の `TO: Agent-XX` 分岐 | 対エージェント送信廃止 |
+   | `inject_event()` の SyslogEvent 受付 | Correlator が代替 |
+
+- [x] 2. **追加する機能**
+
+   ```python
+   async def execute_query(self, request: DeviceQueryRequest) -> DeviceQueryResponse:
+       """Coordinator からの QueryRequest を処理して結果を返す。"""
+       # 既存の _process_event をベースに出力先を戻り値に変更
+       # TO: LOG のみ許可（bus への送信は禁止）
+   ```
+
+- [x] 3. **残す機能**
+   - `_execute_tool()` — show コマンド実行（変更なし）
+   - `_get_llm()` — LLM 初期化（変更なし）
+   - `start()` / `stop()` — ライフサイクル（バス subscribe 範囲を縮小）
+
+- [x] 4. **テスト更新** `tests/test_distributed_device_agent.py`
+   - `execute_query()` テストを追加
+   - `BusMessageEvent` / `inject_event` 関連テストを削除
+
+**完了条件**: DeviceAgent 単体テストが全件パスし、bus への send が `execute_query` 内で発生しないこと。
+
+---
+
+### Phase Refactor-5: Orchestrator 配線更新　🔲 未着手
+
+**目標**: `AgentOrchestrator` に `EventCorrelator` と `IncidentCoordinator` を組み込み、
+SYSLOG 受信から RCA レポートまでのパイプを完成させる。
+
+**実装ファイル**: `src/agentic_ni/distributed/orchestrator.py`
+
+#### タスク
+
+- [x] 1. **`EventCorrelator` と `IncidentCoordinator` を内包**
+
+   ```python
+   class AgentOrchestrator:
+       def __init__(self, ...):
+           ...
+           self._correlator: EventCorrelator | None = None
+           self._coordinator: IncidentCoordinator | None = None
+
+       async def start_from_topology(self, topology_path) -> None:
+           # 既存の DeviceAgent 起動処理は継続
+           # Correlator / Coordinator を初期化して接続
+   ```
+
+- [x] 2. **`broadcast_syslog_to_all()` を `receive_syslog()` に置き換え**
+
+   ```python
+   async def receive_syslog(self, source_hostname: str, raw_msg: str,
+                            severity: str = "unknown") -> None:
+       """SYSLOG を Correlator に渡す（旧 broadcast_syslog_to_all の代替）。"""
+       await self._correlator.receive_syslog(source_hostname, raw_msg)
+   ```
+
+   後方互換のため `broadcast_syslog_to_all()` は deprecation warning 付きで残す。
+
+- [x] 3. **テスト更新** `tests/test_distributed_orchestrator.py`
+   - `receive_syslog()` を使うテストを追加
+   - E2E テスト `tests/test_distributed_e2e.py` を新フロー向けに書き直し
+
+**完了条件**: `agentic-ni-ubuntu --config clos` がエラーなく起動し、SYSLOG 注入から
+RCA レポートまで動作すること。
+
+---
+
+### Phase Refactor-6: システムプロンプト更新　🔲 未着手
+
+**目標**: DeviceAgent の役割変更をプロンプトに反映する。
+
+**実装ファイル**: `prompts/device_agent_system.md`
+
+#### タスク
+
+- [x] 1. **削除・変更するセクション**
+
+   | 現行 | 変更 |
+   |---|---|
+   | ステップ 2「隣接エージェントへの問い合わせ（最大1回のみ）」 | 削除 |
+   | `TO: Agent-XX` 出力フォーマット | 削除 |
+   | `TO: ALL` ブロードキャスト | 削除 |
+   | 役割定義「自律的に調査・報告を行い…隣接エージェントと連携」 | 変更 |
+
+- [x] 2. **追加するセクション**
+
+   - 役割定義を「Coordinator から QueryRequest を受け取り、show コマンドで調査し、
+     `DeviceQueryResponse` を返す専門家」に変更
+   - 出力フォーマットを `TO: COORDINATOR | MSG:` / `TO: LOG | MSG:` のみに変更
+   - 「調査完了条件」セクションを追加（ツール上限に達したら中間結果を返す）
+
+**完了条件**: プロンプトに `TO: Agent-XX` が出現しないこと。
+
+---
+
+### Phase Refactor-7: テスト最終確認　✅ 完了
+
+**目標**: 全テストスイートがパスし、エコーループが消滅していることを確認する。
+
+#### タスク
+
+- [x] 1. **新規テストファイル**
+   - `tests/test_correlator.py`（Refactor-2 で作成済み）
+   - `tests/test_coordinator.py`（Refactor-3 で作成済み）
+
+- [x] 2. **更新テストファイル**
+   - `tests/test_distributed_device_agent.py`（Refactor-4 で更新済み）
+   - `tests/test_distributed_orchestrator.py`（Refactor-5 で更新済み）
+   - `tests/test_distributed_e2e.py`（Refactor-5 で書き直し済み）
+
+- [x] 3. **全テスト実行**
+   ```bash
+   uv run pytest tests/test_distributed*.py tests/test_correlator.py tests/test_coordinator.py -v
+   ```
+
+- [x] 4. **ログ検証**（実機または Mock）
+   - SYSLOG 5件（同一リンク）注入 → Incident 1件のみ発火すること
+   - `調査開始` のログが Coordinator で 1 回のみ出ること
+   - DeviceAgent のログに `TO: Agent-XX` が出ないこと
+
+- [x] 5. **既存テストの非破壊確認**
+   ```bash
+   uv run pytest tests/ -v --ignore=tests/test_live_*.py
+   ```
+
+**完了条件**: 全テストが GREEN になり、ログに調査ループが見られないこと。
+
+---
+
+### Refactor フェーズの実装順序
+
+```
+Refactor-1（データモデル）
+    ↓
+Refactor-2（Correlator）  ←── Refactor-3（Coordinator）と並行可
+Refactor-3
+    ↓
+Refactor-4（DeviceAgent Worker 化）
+    ↓
+Refactor-5（Orchestrator 配線）
+    ↓
+Refactor-6（プロンプト）
+    ↓
+Refactor-7（テスト最終確認）
+```
 ```

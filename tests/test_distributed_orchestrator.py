@@ -457,3 +457,82 @@ class TestTopologyFileLoading:
 
         await orch.stop_all()
         await bus.close()
+
+
+# ---------------------------------------------------------------------------
+# receive_syslog / Correlator 統合テスト
+# ---------------------------------------------------------------------------
+
+class TestReceiveSyslog:
+    async def test_correlator_initialized_after_start(self, tmp_path: Path):
+        """start_from_topology 後に Correlator が初期化されること。"""
+        import yaml
+        topo_file = tmp_path / "topology.yaml"
+        topo_file.write_text(yaml.dump(_P2P_TOPOLOGY))
+
+        bus = InMemoryBus()
+        await bus.connect()
+        orch = AgentOrchestrator(bus=bus)
+
+        assert orch._correlator is None
+        await orch.start_from_topology(topo_file)
+        assert orch._correlator is not None
+        assert orch._coordinator is not None
+
+        await orch.stop_all()
+        await bus.close()
+
+    async def test_receive_syslog_before_start_logs_warning(self):
+        """start_from_topology 前に receive_syslog を呼んでも例外が出ないこと。"""
+        bus = InMemoryBus()
+        orch = AgentOrchestrator(bus=bus)
+
+        # Correlator 未初期化でも例外なく終了すること
+        await orch.receive_syslog("R1", "%LINK-3-UPDOWN: GigabitEthernet0/0 down")
+
+    async def test_receive_syslog_routes_to_correlator(self, tmp_path: Path):
+        """receive_syslog が Correlator にバッファされること。"""
+        import yaml
+        from langchain_core.messages import AIMessage
+
+        class _NoopLLM:
+            def bind_tools(self, t): return self
+            async def ainvoke(self, msgs): return AIMessage(content="TO: LOG | MSG: no-op")
+
+        topo_file = tmp_path / "topology.yaml"
+        topo_file.write_text(yaml.dump(_P2P_TOPOLOGY))
+
+        bus = InMemoryBus()
+        await bus.connect()
+        orch = AgentOrchestrator(bus=bus, llm=_NoopLLM())
+        await orch.start_from_topology(topo_file)
+
+        await orch.receive_syslog("R1", "%LINK-3-UPDOWN: GigabitEthernet0/0 down")
+        # バッファに蓄積されていること（キーが存在する）
+        assert len(orch._correlator._buffers) == 1
+
+        await orch.stop_all()
+        await bus.close()
+
+    async def test_broadcast_syslog_deprecated_but_functional(self, tmp_path: Path):
+        """broadcast_syslog_to_all が receive_syslog に委譲され動作すること。"""
+        import yaml
+        from langchain_core.messages import AIMessage
+
+        class _NoopLLM:
+            def bind_tools(self, t): return self
+            async def ainvoke(self, msgs): return AIMessage(content="TO: LOG | MSG: no-op")
+
+        topo_file = tmp_path / "topology.yaml"
+        topo_file.write_text(yaml.dump(_P2P_TOPOLOGY))
+
+        bus = InMemoryBus()
+        await bus.connect()
+        orch = AgentOrchestrator(bus=bus, llm=_NoopLLM())
+        await orch.start_from_topology(topo_file)
+
+        count = await orch.broadcast_syslog_to_all("R1", "%SYS-5-CONFIG_I: test")
+        assert count == 2  # エージェント数を返す
+
+        await orch.stop_all()
+        await bus.close()

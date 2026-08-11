@@ -1,15 +1,14 @@
-"""装置エージェント本体。
+"""装置エージェント本体（Worker モード）。
 
-1 装置 = 1 DeviceAgent。asyncio タスクとして非同期に動作し、
-イベントキューからイベントを取り出して LLM 推論 → バスへの出力ルーティングを行う。
+Coordinator から DeviceQueryRequest を受け取り、show コマンドで自装置を調査して
+DeviceQueryResponse を返す。P2P メッセージングは廃止。
 
-イベントの種類:
-  - SyslogEvent    : syslog メッセージ（外部からの inject_event() で注入）
-  - BusMessageEvent: 他エージェントからのバスメッセージ（自動サブスクライブ）
-  - PollEvent      : ポーリング結果（外部からの inject_event() で注入）
+イベントの種類（PollEvent のみ）:
+  - PollEvent : ポーリング結果（inject_event() で注入）
 
 出力フォーマット（LLM が生成することを期待する形式）:
-  TO: [宛先] | MSG: [メッセージ本文]
+  TO: COORDINATOR | MSG: [調査結果]
+  TO: LOG         | MSG: [ローカル記録]
 """
 
 from __future__ import annotations
@@ -24,10 +23,9 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agentic_ni.distributed.bus import MessageBus
-from agentic_ni.distributed.dedup import MessageDeduplicator, SyslogDeduplicator
+from agentic_ni.distributed.incident import DeviceQueryRequest, DeviceQueryResponse
 from agentic_ni.distributed.log_poller import DeviceLogPoller
 from agentic_ni.distributed.memory import DeviceMemory
-from agentic_ni.distributed.message import AgentMessage
 from agentic_ni.distributed.prompts import build_device_prompt
 
 logger = logging.getLogger(__name__)
@@ -40,9 +38,6 @@ _MAX_TOOL_CALLS = 10
 
 # ツール出力の最大文字数（RateLimit 防止のため切り詰める）
 _MAX_TOOL_OUTPUT_CHARS = 3000
-
-# BusMessage チェーンのホップ上限（bus.py の MAX_HOP_COUNT と合わせる）
-_MAX_BUS_HOP_COUNT = 2
 
 
 # ---------------------------------------------------------------------------
@@ -58,19 +53,13 @@ class SyslogEvent:
 
 
 @dataclass
-class BusMessageEvent:
-    """他エージェントからのバスメッセージから生成されるイベント。"""
-    message: AgentMessage
-
-
-@dataclass
 class PollEvent:
     """定期ポーリングの結果から生成されるイベント。"""
     source: str    # ツール名（例: "run_show"）
     content: str   # コマンド出力テキスト
 
 
-AgentEvent = Union[SyslogEvent, BusMessageEvent, PollEvent]
+AgentEvent = Union[SyslogEvent, PollEvent]
 
 
 # ---------------------------------------------------------------------------
@@ -156,12 +145,6 @@ class DeviceAgent:
         self._event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         self._running = False
         self._task: asyncio.Task | None = None
-        self._current_event: AgentEvent | None = None  # hop_count 引き継ぎ用
-        self._syslog_dedup = SyslogDeduplicator(window_seconds=60)
-        # 同一 origin_message_id チェーンの重複応答を防ぐ（300 秒 TTL）
-        self._chain_dedup = MessageDeduplicator(window_seconds=300)
-        # 調査中フラグ: True のとき新規 SyslogEvent をキューに積まない
-        self._investigating: bool = False
         # デモ・可視化用フック（None の場合は無効）
         self.on_tool_call: "Callable[[str, str, dict], None] | None" = None
         self.on_llm_turn: "Callable[[str, int], None] | None" = None
@@ -171,11 +154,7 @@ class DeviceAgent:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """バスをサブスクライブしてイベントループを起動する。"""
-        await self._bus.subscribe(
-            f"network/agents/{self.agent_id}/direct", self._on_bus_message
-        )
-        await self._bus.subscribe("network/agents/chat", self._on_bus_message)
+        """イベントループを起動する。"""
         self._running = True
         self._task = asyncio.create_task(self._run_loop(), name=f"agent-{self.agent_id}")
         if self._log_poller:
@@ -183,7 +162,7 @@ class DeviceAgent:
         logger.info("[%s] 起動しました。", self.agent_id)
 
     async def stop(self) -> None:
-        """イベントループを停止してバスのサブスクリプションを解除する。"""
+        """イベントループを停止する。"""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -193,39 +172,10 @@ class DeviceAgent:
                 pass
         if self._log_poller:
             await self._log_poller.stop()
-        await self._bus.unsubscribe(
-            f"network/agents/{self.agent_id}/direct", self._on_bus_message
-        )
-        await self._bus.unsubscribe("network/agents/chat", self._on_bus_message)
         logger.info("[%s] 停止しました。", self.agent_id)
 
-    def _is_my_syslog(self, source_hostname: str) -> bool:
-        """SYSLOGの送信元が自分の担当装置かどうかを判定する。"""
-        return source_hostname.lower() == self.device_name.lower()
-
     async def inject_event(self, event: AgentEvent) -> None:
-        """外部からイベントを注入する（syslog・ポーリング結果等）。"""
-        if isinstance(event, SyslogEvent):
-            # source_hostname が設定されており自分と無関係なら無視（ブロードキャスト時のフィルタ）
-            if event.source_hostname and not self._is_my_syslog(event.source_hostname):
-                logger.debug(
-                    "[%s] 無関係な SYSLOG を無視: source=%s", self.agent_id, event.source_hostname
-                )
-                return
-            if self._syslog_dedup.is_duplicate(self.agent_id, event.raw_text):
-                logger.info(
-                    "[%s] 重複 syslog を破棄: %s", self.agent_id, event.raw_text[:80]
-                )
-                return
-            self._syslog_dedup.mark_seen(self.agent_id, event.raw_text)
-            # 調査中は新規調査セッションとしてキューに積まず、参考情報としてメモリに記録する
-            if self._investigating:
-                logger.info(
-                    "[%s] 調査中のため syslog をメモリに記録（新規調査はスキップ）: %s",
-                    self.agent_id, event.raw_text[:80],
-                )
-                self._memory.add_status("syslog", event.raw_text)
-                return
+        """外部からイベントを注入する（PollEvent のみ）。"""
         await self._event_queue.put(event)
 
     async def wait_idle(self) -> None:
@@ -251,35 +201,12 @@ class DeviceAgent:
             finally:
                 self._event_queue.task_done()
 
-    async def _on_bus_message(self, topic: str, msg: AgentMessage) -> None:
-        """バス経由のメッセージを受信してキューに積む。"""
-        if msg.from_agent == self.agent_id:
-            return  # 自分が送ったメッセージはスキップ
-        if msg.hop_count >= _MAX_BUS_HOP_COUNT:
-            logger.info(
-                "[%s] ホップ数上限(%d)に達したメッセージを破棄: from=%s hop=%d",
-                self.agent_id, _MAX_BUS_HOP_COUNT, msg.from_agent, msg.hop_count,
-            )
-            return
-        # 同一チェーン（origin_message_id）を複数回処理しない
-        chain_id = msg.origin_message_id or msg.message_id
-        if self._chain_dedup.is_duplicate(chain_id):
-            logger.info(
-                "[%s] 同一チェーンの重複メッセージを破棄: chain=%s from=%s",
-                self.agent_id, chain_id[:8], msg.from_agent,
-            )
-            return
-        self._chain_dedup.mark_seen(chain_id)
-        await self._event_queue.put(BusMessageEvent(message=msg))
-
     # ------------------------------------------------------------------
-    # イベント処理
+    # イベント処理（PollEvent 用ループ）
     # ------------------------------------------------------------------
 
     async def _process_event(self, event: AgentEvent) -> None:
-        """イベントを LLM に渡して推論し、ツール呼び出しループ後に結果をルーティングする。"""
-        self._current_event = event
-        self._investigating = True
+        """PollEvent を LLM に渡して推論し、ツール呼び出しループ後に結果をルーティングする。"""
         summary = _event_summary(event)
         self._memory.add_status(_event_source(event), summary)
         logger.info("[%s] 調査開始: %s", self.agent_id, summary[:80])
@@ -304,7 +231,6 @@ class DeviceAgent:
                 output_text: str = (
                     response.content if hasattr(response, "content") else str(response)
                 )
-                self._investigating = False
                 await self._route_output(output_text)
                 return
 
@@ -317,7 +243,6 @@ class DeviceAgent:
                 messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
 
         logger.warning("[%s] ツール呼び出し上限(%d)に達しました。", self.agent_id, _MAX_TOOL_CALLS)
-        self._investigating = False
 
     async def _execute_tool(self, tool_call: dict) -> str:
         """ツール呼び出し辞書を受け取り、対応するツールを実行して結果文字列を返す。"""
@@ -370,14 +295,14 @@ class DeviceAgent:
         ]
 
     async def _route_output(self, text: str) -> None:
-        """LLM 出力を解析してバス送信 / 人間キュー / ログに振り分ける。"""
+        """LLM 出力を解析して LOG / HUMAN に振り分ける（Worker モード）。"""
         for target, content in parse_agent_output(text):
             if target.upper() == "LOG":
                 self._memory.add_status("llm", content)
                 logger.debug("[%s] LOG: %s", self.agent_id, content[:80])
 
-            elif target.upper() == "HUMAN":
-                logger.info("[%s] → HUMAN: %s", self.agent_id, content[:120])
+            elif target.upper() in ("HUMAN", "COORDINATOR"):
+                logger.info("[%s] → %s: %s", self.agent_id, target, content[:120])
                 if self._human_queue is not None:
                     await self._human_queue.put({
                         "from_agent": self.agent_id,
@@ -385,33 +310,8 @@ class DeviceAgent:
                     })
 
             else:
-                # 他エージェント or ALL へバス送信
-                is_broadcast = target.upper() == "ALL"
-                # BusMessageEvent の場合は転送なのでホップ数をインクリメントして引き継ぐ
-                if isinstance(self._current_event, BusMessageEvent):
-                    hop = self._current_event.message.hop_count + 1
-                    origin_id = (
-                        self._current_event.message.origin_message_id
-                        or self._current_event.message.message_id
-                    )
-                else:  # SyslogEvent / PollEvent は新規発火
-                    hop = 0
-                    origin_id = None
-                msg = AgentMessage(
-                    from_agent=self.agent_id,
-                    to_agent=target,
-                    msg_type="alert" if is_broadcast else "query",
-                    content=content,
-                    hop_count=hop,
-                    origin_message_id=origin_id,
-                )
-                topic = (
-                    "network/agents/chat"
-                    if is_broadcast
-                    else f"network/agents/{target}/direct"
-                )
-                await self._bus.publish(topic, msg)
-                logger.info("[%s] → %s: %s", self.agent_id, target, content[:80])
+                # Worker モードではエージェント間バス送信は行わない
+                logger.debug("[%s] バス送信スキップ (Worker モード): target=%s", self.agent_id, target)
 
     # ------------------------------------------------------------------
     # 内部ヘルパー
@@ -424,6 +324,86 @@ class DeviceAgent:
             self._llm = get_llm()
         return self._llm
 
+    # ------------------------------------------------------------------
+    # Worker API（Coordinator から直接呼ばれる）
+    # ------------------------------------------------------------------
+
+    async def execute_query(self, request: DeviceQueryRequest) -> DeviceQueryResponse:
+        """Coordinator からの QueryRequest を処理して調査結果を返す。"""
+        logger.info("[%s] クエリ受信: incident=%s", self.agent_id, request.incident_id[:8])
+        self._memory.add_status("coordinator", request.symptom_summary[:200])
+
+        messages = self._build_query_messages(request)
+        llm = self._get_llm()
+        llm_with_tools = llm.bind_tools(self._tools) if self._tools else llm
+        show_outputs: dict[str, str] = {}
+
+        for _turn in range(_MAX_TOOL_CALLS):
+            logger.info("[%s] LLM問い合わせ中 (ターン %d/%d)...", self.agent_id, _turn + 1, _MAX_TOOL_CALLS)
+            try:
+                response = await llm_with_tools.ainvoke(messages)
+            except Exception as exc:
+                logger.exception("[%s] LLM 呼び出しに失敗しました。", self.agent_id)
+                return DeviceQueryResponse(
+                    incident_id=request.incident_id,
+                    from_device=self.device_name,
+                    findings=f"LLM エラー: {exc}",
+                    show_outputs=show_outputs,
+                    error=True,
+                    error_detail=str(exc),
+                )
+
+            messages.append(response)
+            tool_calls = getattr(response, "tool_calls", None)
+
+            if not tool_calls:
+                findings = response.content if hasattr(response, "content") else str(response)
+                logger.info("[%s] クエリ完了: %s...", self.agent_id, findings[:80])
+                return DeviceQueryResponse(
+                    incident_id=request.incident_id,
+                    from_device=self.device_name,
+                    findings=findings,
+                    show_outputs=show_outputs,
+                )
+
+            tool_names = [tc.get("name", "?") for tc in tool_calls]
+            logger.info("[%s] LLM応答: ツール呼び出し %s", self.agent_id, tool_names)
+            from langchain_core.messages import ToolMessage
+            for tc in tool_calls:
+                result = await self._execute_tool(tc)
+                messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
+                cmd = tc.get("args", {}).get("command", tc.get("name", ""))
+                if cmd:
+                    show_outputs[cmd] = result[:_MAX_TOOL_OUTPUT_CHARS]
+
+        logger.warning("[%s] ツール上限に達しました。中間結果を返します。", self.agent_id)
+        return DeviceQueryResponse(
+            incident_id=request.incident_id,
+            from_device=self.device_name,
+            findings="ツール呼び出し上限に達しました。中間調査結果を参照してください。",
+            show_outputs=show_outputs,
+        )
+
+    def _build_query_messages(self, request: DeviceQueryRequest) -> list:
+        """QueryRequest 用の LLM メッセージリストを組み立てる。"""
+        system_prompt = build_device_prompt(
+            device_name=self.device_name,
+            device_type=self._device_type,
+            management_ip=self._management_ip,
+            neighbors=self._memory.neighbor_map,
+        )
+        context = self._memory.recent_status_summary(n=5)
+        user_content = (
+            f"## 調査依頼\n{request.symptom_summary}\n\n"
+            f"## 直近のステータス履歴\n{context}\n\n"
+            "show コマンドで自装置の状態を調査し、"
+            "調査結果を TO: COORDINATOR | MSG: ... 形式で報告してください。"
+        )
+        return [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_content),
+        ]
+
 
 # ---------------------------------------------------------------------------
 # イベントユーティリティ
@@ -433,10 +413,6 @@ def _event_summary(event: AgentEvent) -> str:
     """イベントの要約文字列を返す（メモリ記録・ログ用）。"""
     if isinstance(event, SyslogEvent):
         return f"[SYSLOG/{event.severity}] {event.raw_text}"
-    if isinstance(event, BusMessageEvent):
-        msg = event.message
-        # hop_count を含めることで LLM が会話の深さを把握できる
-        return f"[BUS from {msg.from_agent}, hop={msg.hop_count}] {msg.content}"
     if isinstance(event, PollEvent):
         return f"[POLL/{event.source}] {event.content[:200]}"
     return str(event)
@@ -446,6 +422,4 @@ def _event_source(event: AgentEvent) -> str:
     """メモリに記録する source タグを返す。"""
     if isinstance(event, SyslogEvent):
         return "syslog"
-    if isinstance(event, BusMessageEvent):
-        return "bus"
     return "poll"

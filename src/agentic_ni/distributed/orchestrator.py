@@ -25,6 +25,8 @@ from typing import Any, Callable
 import yaml
 
 from agentic_ni.distributed.bus import MessageBus, create_bus
+from agentic_ni.distributed.coordinator import IncidentCoordinator
+from agentic_ni.distributed.correlator import EventCorrelator
 from agentic_ni.distributed.device_agent import DeviceAgent, SyslogEvent
 from agentic_ni.distributed.device_tools import MockDeviceToolkit, create_device_toolkit
 from agentic_ni.distributed.memory import DeviceMemory, NeighborInfo
@@ -163,6 +165,9 @@ class AgentOrchestrator:
         self._log_poll_interval = log_poll_interval
         self._agents: dict[str, DeviceAgent] = {}  # agent_id → DeviceAgent
         self.human_queue: asyncio.Queue = asyncio.Queue()
+        # Correlator / Coordinator は start_from_topology() で初期化する
+        self._correlator: EventCorrelator | None = None
+        self._coordinator: IncidentCoordinator | None = None
 
     # ------------------------------------------------------------------
     # 起動・停止
@@ -191,6 +196,19 @@ class AgentOrchestrator:
             await self._start_agent(node_info, neighbor_map.get(node_info.id, []))
 
         logger.info("%d 台のエージェントを起動しました。", len(self._agents))
+
+        # device_name → DeviceAgent の registry を構築
+        device_registry = {agent.device_name: agent for agent in self._agents.values()}
+        self._coordinator = IncidentCoordinator(
+            agent_registry=device_registry,
+            llm=self._llm,
+            human_queue=self.human_queue,
+        )
+        self._correlator = EventCorrelator(
+            topology_data=data,
+            on_incident=self._coordinator.handle_incident,
+        )
+        logger.info("EventCorrelator / IncidentCoordinator を初期化しました。")
 
     async def _start_agent(
         self, node_info: NodeInfo, neighbors: list[NeighborInfo]
@@ -231,7 +249,9 @@ class AgentOrchestrator:
         return agent
 
     async def stop_all(self) -> None:
-        """全 DeviceAgent を停止する。"""
+        """Correlator をフラッシュして全 DeviceAgent を停止する。"""
+        if self._correlator is not None:
+            await self._correlator.flush_all()
         for agent in list(self._agents.values()):
             await agent.stop()
         self._agents.clear()
@@ -254,8 +274,20 @@ class AgentOrchestrator:
         return len(self._agents)
 
     # ------------------------------------------------------------------
-    # SYSLOG ブロードキャスト（SyslogServer からの呼び出し）
+    # SYSLOG 受信（SyslogServer / ubuntu_cli からの呼び出し）
     # ------------------------------------------------------------------
+
+    async def receive_syslog(
+        self,
+        source_hostname: str,
+        raw_msg: str,
+        severity: str = "unknown",
+    ) -> None:
+        """SYSLOG を EventCorrelator に渡して相関・Incident 化する。"""
+        if self._correlator is None:
+            logger.warning("Correlator 未初期化。start_from_topology 実行後に呼び出してください。")
+            return
+        await self._correlator.receive_syslog(source_hostname, raw_msg)
 
     async def broadcast_syslog_to_all(
         self,
@@ -263,26 +295,11 @@ class AgentOrchestrator:
         raw_msg: str,
         severity: str = "unknown",
     ) -> int:
-        """受信した SYSLOG を全エージェントにブロードキャストする。
-
-        各エージェントが自分の担当装置からの SYSLOG かどうかを判定し、
-        関係ある場合のみ調査を開始する（DeviceAgent._is_my_syslog() 参照）。
-
-        Args:
-            source_hostname: SYSLOG の送信元ホスト名（装置名）。
-            raw_msg:         SYSLOG 本文。
-            severity:        重大度文字列（例: "err", "warning"）。
-
-        Returns:
-            ブロードキャストしたエージェント数。
-        """
-        event = SyslogEvent(
-            raw_text=raw_msg,
-            severity=severity,
-            source_hostname=source_hostname,
+        """非推奨: receive_syslog() を使用してください。将来廃止予定。"""
+        logger.debug(
+            "broadcast_syslog_to_all は非推奨です。receive_syslog を使用してください。"
         )
-        for agent in self._agents.values():
-            await agent.inject_event(event)
+        await self.receive_syslog(source_hostname, raw_msg, severity)
         return len(self._agents)
 
     # ------------------------------------------------------------------
