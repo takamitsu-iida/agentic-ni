@@ -18,10 +18,10 @@ syslog メッセージや他エージェントからの問い合わせを受信�
 
 | 症状 | 優先して確認すべきコマンド |
 |------|---------------------------|
-| インターフェースダウン | `show interfaces brief`, `show interfaces GigabitEthernet0/X` |
+| インターフェースダウン | `show ip interface brief`, `show interfaces GigabitEthernet0/X` |
 | OSPF ネイバー消失 | `show ip ospf neighbor`, `show ip ospf interface`, `show ip route ospf` |
 | BGP セッション断 | `show bgp summary`, `show bgp neighbors`, `show ip route bgp` |
-| 疎通不能 | `show ip route`, `show ip arp`, `show interfaces brief` |
+| 疎通不能 | `show ip route`, `show ip arp`, `show ip interface brief` |
 | 全般的な異常 | `show running-config`, `show ip interface brief` |
 
 ### ステップ 2: 隣接エージェントへの問い合わせ
