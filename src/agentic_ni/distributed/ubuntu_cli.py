@@ -55,6 +55,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from pathlib import Path as _Path
+
 from agentic_ni.distributed.bus import create_bus
 from agentic_ni.distributed.device_tools import DeviceToolkit, MockDeviceToolkit
 from agentic_ni.distributed.message import AgentMessage
@@ -63,6 +65,9 @@ from agentic_ni.distributed.syslog_server import SyslogFileWatcher, SyslogServer
 from agentic_ni.logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
+
+# src/agentic_ni/distributed/ → プロジェクトルート → trouble_shooting/configs/
+_CONFIGS_DIR = _Path(__file__).parent.parent.parent.parent / "trouble_shooting" / "configs"
 
 # ---------------------------------------------------------------------------
 # ANSI カラー
@@ -130,30 +135,34 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "例:\n"
-            "  # ファイル監視（デフォルト、root 権限不要）\n"
+            "  # --config でトポロジ・テストベッドを自動解決（推奨）\n"
+            "  agentic-ni-ubuntu --config clos\n\n"
+            "  # パスを直接指定\n"
             "  agentic-ni-ubuntu \\\n"
-            "      --topology configs/demo2/topology.yaml \\\n"
-            "      --testbed testbed.yaml\n\n"
+            "      --topology trouble_shooting/configs/clos/topology.yaml \\\n"
+            "      --testbed trouble_shooting/configs/clos/testbed.yaml\n\n"
             "  # UDP 直接受信（root 権限が必要）\n"
-            "  sudo agentic-ni-ubuntu \\\n"
-            "      --topology configs/demo2/topology.yaml \\\n"
-            "      --syslog-file '' --testbed testbed.yaml\n\n"
+            "  sudo agentic-ni-ubuntu --config clos --syslog-file ''\n\n"
             "  # テスト（モックツール + 非特権ポート）\n"
-            "  agentic-ni-ubuntu \\\n"
-            "      --topology configs/demo2/topology.yaml \\\n"
-            "      --syslog-port 5140 --mock-tools\n"
+            "  agentic-ni-ubuntu --config clos --syslog-port 5140 --mock-tools\n"
         ),
     )
     parser.add_argument(
-        "--topology", required=True,
-        help="topology.yaml のパス（例: configs/demo2/topology.yaml）",
+        "--config",
+        help=(
+            "設定名（例: clos）。trouble_shooting/configs/<config>/ から "
+            "topology.yaml と testbed.yaml を自動解決する。"
+            "--topology / --testbed と同時指定不可。"
+        ),
+    )
+    parser.add_argument(
+        "--topology",
+        help="topology.yaml のパス（--config 未使用時に指定）",
     )
     parser.add_argument(
         "--testbed",
         help=(
-            "pyATS testbed YAML のパス。"
-            "各装置の IP アドレスと SSH 認証情報を記述するユーザー作成ファイル。"
-            "サンプル: testbed.yaml.sample 参照。"
+            "pyATS testbed YAML のパス（--config 未使用時に指定）。"
             "省略時はツールなしで起動（SYSLOG 受信のみ、show コマンド不可）。"
         ),
     )
@@ -189,7 +198,40 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="ログレベル（デフォルト: INFO）",
     )
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+
     args = parser.parse_args()
+
+    # --config からトポロジ・テストベッドパスを解決する
+    if args.config:
+        if args.topology or args.testbed:
+            parser.error("--config と --topology / --testbed は同時に指定できません")
+        config_dir = _CONFIGS_DIR / args.config
+        if not config_dir.is_dir():
+            parser.error(f"設定ディレクトリが見つかりません: {config_dir}")
+        args.topology = str(config_dir / "topology.yaml")
+        testbed_path = config_dir / "testbed.yaml"
+        if testbed_path.exists() and not args.testbed:
+            args.testbed = str(testbed_path)
+    elif not args.topology:
+        parser.error("--config または --topology のいずれかを指定してください")
+
+    # .env が読み取れなければ早期終了
+    from dotenv import find_dotenv, load_dotenv
+    _env_file = find_dotenv(usecwd=True)
+    if not _env_file:
+        print(_c(_BOLD + _RED, "[ERROR] .env ファイルが見つかりません。"), file=sys.stderr)
+        print("  LLM の API キーを .env に設定してください:", file=sys.stderr)
+        print("    cp .env.example .env", file=sys.stderr)
+        print("    # .env を開いて OPENAI_API_KEY などを設定する", file=sys.stderr)
+        sys.exit(1)
+    try:
+        load_dotenv(_env_file)
+    except OSError as e:
+        print(_c(_BOLD + _RED, f"[ERROR] .env を読み込めませんでした: {e}"), file=sys.stderr)
+        sys.exit(1)
 
     configure_logging(verbose=(args.log_level == "DEBUG"), quiet=(args.log_level in ("WARNING", "ERROR")))
     asyncio.run(_async_main(args))

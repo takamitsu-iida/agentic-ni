@@ -112,6 +112,11 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
     print(f"   Lab ID : {lab_id}")
     print(f"   タイトル: {title}")
     print()
+    print("⚠️  .env に LLM の API キーを設定してください:")
+    print("   OPENAI_API_KEY=sk-...")
+    print("   ANTHROPIC_API_KEY=sk-ant-...")
+    print("   （使用するプロバイダーのキーのみで可）")
+    print()
     print("次のステップ:")
     _print_next_steps(args.config, lab_id, title)
     return 0
@@ -120,12 +125,8 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
 def _print_next_steps(config: str, lab_id: str, title: str) -> None:
     """設定ごとの次のステップを表示する。"""
     if config == "clos":
-        topo = f"trouble_shooting/configs/clos/topology.yaml"
-        testbed = f"trouble_shooting/configs/clos/testbed.yaml"
         print(f"  # ② Ubuntu ノード上でエージェントを起動する:")
-        print(f"  agentic-ni-ubuntu \\")
-        print(f"      --topology {topo} \\")
-        print(f"      --testbed {testbed}")
+        print(f"  agentic-ni-ubuntu --config clos")
         print()
         print(f"  # ③ 障害を発生させる（シナリオ G: Spine1-Leaf1 リンク断）:")
         print(f"  uv run agentic-ni-lab fault --title {title} --link l0 --down")
