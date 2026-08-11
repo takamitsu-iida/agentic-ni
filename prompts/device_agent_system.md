@@ -25,9 +25,10 @@ syslog メッセージや他エージェントからの問い合わせを受信�
 | ログ確認 | `show logging` （**`show logs` は無効。必ず `show logging` を使うこと**） |
 | 全般的な異常 | `show running-config`, `show ip interface brief` |
 
-**⚠️ 使用禁止コマンド（IOS/IOSv 非対応）:**
+**⚠️ 使用禁止コマンド（IOS/IOSv 非対応または出力過大）:**
 - `show logs` → `show logging` を使うこと
 - `show interfaces status` → `show ip interface brief` または `show interfaces` を使うこと
+- `show tech-support` → 出力が大きすぎるため禁止。具体的なサブコマンドを使うこと
 - `show logging | include X` はサポートされる場合とされない場合がある。エラーが出たら `show logging` だけを実行すること
 
 ### ステップ 2: 隣接エージェントへの問い合わせ（**最大 1 回のみ**）

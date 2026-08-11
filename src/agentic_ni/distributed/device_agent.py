@@ -38,6 +38,9 @@ _OUTPUT_LINE_RE = re.compile(r"TO:\s*(\S+)\s*\|\s*MSG:\s*(.*)", re.IGNORECASE)
 # ツール呼び出しループの上限（無限ループ防止）
 _MAX_TOOL_CALLS = 10
 
+# ツール出力の最大文字数（RateLimit 防止のため切り詰める）
+_MAX_TOOL_OUTPUT_CHARS = 3000
+
 # BusMessage チェーンのホップ上限（bus.py の MAX_HOP_COUNT と合わせる）
 _MAX_BUS_HOP_COUNT = 2
 
@@ -157,6 +160,8 @@ class DeviceAgent:
         self._syslog_dedup = SyslogDeduplicator(window_seconds=60)
         # 同一 origin_message_id チェーンの重複応答を防ぐ（300 秒 TTL）
         self._chain_dedup = MessageDeduplicator(window_seconds=300)
+        # 調査中フラグ: True のとき新規 SyslogEvent をキューに積まない
+        self._investigating: bool = False
         # デモ・可視化用フック（None の場合は無効）
         self.on_tool_call: "Callable[[str, str, dict], None] | None" = None
         self.on_llm_turn: "Callable[[str, int], None] | None" = None
@@ -213,6 +218,14 @@ class DeviceAgent:
                 )
                 return
             self._syslog_dedup.mark_seen(self.agent_id, event.raw_text)
+            # 調査中は新規調査セッションとしてキューに積まず、参考情報としてメモリに記録する
+            if self._investigating:
+                logger.info(
+                    "[%s] 調査中のため syslog をメモリに記録（新規調査はスキップ）: %s",
+                    self.agent_id, event.raw_text[:80],
+                )
+                self._memory.add_status("syslog", event.raw_text)
+                return
         await self._event_queue.put(event)
 
     async def wait_idle(self) -> None:
@@ -266,6 +279,7 @@ class DeviceAgent:
     async def _process_event(self, event: AgentEvent) -> None:
         """イベントを LLM に渡して推論し、ツール呼び出しループ後に結果をルーティングする。"""
         self._current_event = event
+        self._investigating = True
         summary = _event_summary(event)
         self._memory.add_status(_event_source(event), summary)
         logger.info("[%s] 調査開始: %s", self.agent_id, summary[:80])
@@ -290,6 +304,7 @@ class DeviceAgent:
                 output_text: str = (
                     response.content if hasattr(response, "content") else str(response)
                 )
+                self._investigating = False
                 await self._route_output(output_text)
                 return
 
@@ -302,6 +317,7 @@ class DeviceAgent:
                 messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
 
         logger.warning("[%s] ツール呼び出し上限(%d)に達しました。", self.agent_id, _MAX_TOOL_CALLS)
+        self._investigating = False
 
     async def _execute_tool(self, tool_call: dict) -> str:
         """ツール呼び出し辞書を受け取り、対応するツールを実行して結果文字列を返す。"""
@@ -318,9 +334,13 @@ class DeviceAgent:
                     # sync ツールをスレッドプールで実行してイベントループをブロックしない
                     result = await asyncio.to_thread(t.invoke, tool_args)
                     logger.info("[%s] ツール完了: %s", self.agent_id, tool_name)
-                    self._memory.add_status("tool", f"{tool_name}: {str(result)[:200]}")
+                    result_str = str(result)
+                    self._memory.add_status("tool", f"{tool_name}: {result_str[:200]}")
                     logger.debug("[%s] ツール %s 実行完了", self.agent_id, tool_name)
-                    return str(result)
+                    # LLM への送信前に出力を切り詰め（RateLimit 防止）
+                    if len(result_str) > _MAX_TOOL_OUTPUT_CHARS:
+                        result_str = result_str[:_MAX_TOOL_OUTPUT_CHARS] + "\n... (出力が長いため省略)"
+                    return result_str
                 except Exception as exc:
                     error_msg = f"ツール {tool_name!r} 実行エラー: {type(exc).__name__}: {exc}"
                     logger.warning("[%s] %s", self.agent_id, error_msg, exc_info=True)
@@ -338,7 +358,7 @@ class DeviceAgent:
             neighbors=self._memory.neighbor_map,
         )
         event_text = _event_summary(event)
-        context = self._memory.recent_status_summary(n=5)
+        context = self._memory.recent_status_summary(n=10)
 
         user_content = (
             f"## 受信イベント\n{event_text}\n\n"

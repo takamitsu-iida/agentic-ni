@@ -101,6 +101,13 @@ class DeviceToolkit:
         def run_show(command: str) -> str:
             """任意の show コマンドを実行してテキスト出力を返す。"""
             _assert_testbed(testbed_yaml, device_name)
+            # 大量出力コマンドは RateLimit の原因になるため禁止
+            _blocked = ("show tech-support", "show tech support")
+            if command.strip().lower().startswith(_blocked):
+                return (
+                    f"コマンド '{command}' は出力が大きすぎるため禁止されています。"
+                    "具体的なサブコマンド（show interfaces, show ip bgp summary 等）を使用してください。"
+                )
             from agentic_ni.tools.pyats_tools import run_show_command
             result = run_show_command(testbed_yaml, device_name, command)
             return result.get("raw_output", json.dumps(result, ensure_ascii=False))
