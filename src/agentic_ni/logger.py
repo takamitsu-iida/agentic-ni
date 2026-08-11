@@ -25,8 +25,8 @@ import logging
 import sys
 from pathlib import Path
 
-# コンソール向け: メッセージのみ（既存の print と同等の見た目）
-_FMT_SIMPLE = "%(message)s"
+# コンソール向け: 時刻 + メッセージ（遅延調査・タイムライン確認に使用）
+_FMT_SIMPLE = "%(asctime)s  %(message)s"
 # verbose 向け: タイムスタンプ + ロガー名 + レベル付き
 _FMT_VERBOSE = "%(asctime)s  %(name)-35s  %(levelname)-8s  %(message)s"
 # ファイル向け: 常に詳細フォーマット
@@ -97,7 +97,7 @@ def configure_logging(
     # --- コンソールハンドラー ---
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(level)
-    console.setFormatter(logging.Formatter(fmt))
+    console.setFormatter(logging.Formatter(fmt, datefmt="%H:%M:%S"))
     root.addHandler(console)
 
     # --- ファイルハンドラー（オプション） ---

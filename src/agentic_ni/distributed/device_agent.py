@@ -248,13 +248,14 @@ class DeviceAgent:
         self._current_event = event
         summary = _event_summary(event)
         self._memory.add_status(_event_source(event), summary)
-        logger.debug("[%s] イベント処理: %s", self.agent_id, summary[:80])
+        logger.info("[%s] 調査開始: %s", self.agent_id, summary[:80])
 
         messages = self._build_messages(event)
         llm = self._get_llm()
         llm_with_tools = llm.bind_tools(self._tools) if self._tools else llm
 
         for _turn in range(_MAX_TOOL_CALLS):
+            logger.info("[%s] LLM問い合わせ中 (ターン %d/%d)...", self.agent_id, _turn + 1, _MAX_TOOL_CALLS)
             try:
                 response = await llm_with_tools.ainvoke(messages)
             except Exception:
@@ -273,6 +274,8 @@ class DeviceAgent:
                 return
 
             # ツール呼び出しを実行してメッセージに追記
+            tool_names = [tc.get("name", "?") for tc in tool_calls]
+            logger.info("[%s] LLM応答: ツール呼び出し %s", self.agent_id, tool_names)
             from langchain_core.messages import ToolMessage
             for tc in tool_calls:
                 result = await self._execute_tool(tc)
@@ -291,8 +294,10 @@ class DeviceAgent:
         for t in self._tools:
             if t.name == tool_name:
                 try:
+                    logger.info("[%s] ツール実行中: %s %s", self.agent_id, tool_name, str(tool_args)[:80])
                     # sync ツールをスレッドプールで実行してイベントループをブロックしない
                     result = await asyncio.to_thread(t.invoke, tool_args)
+                    logger.info("[%s] ツール完了: %s", self.agent_id, tool_name)
                     self._memory.add_status("tool", f"{tool_name}: {str(result)[:200]}")
                     logger.debug("[%s] ツール %s 実行完了", self.agent_id, tool_name)
                     return str(result)
