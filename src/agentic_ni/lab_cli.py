@@ -59,17 +59,27 @@ def _load_configs(config_name: str) -> tuple[str, dict[str, str]]:
 
 def _cmd_deploy(args: argparse.Namespace) -> int:
     """deploy サブコマンド: ラボを作成・起動する。"""
+    import yaml
     from agentic_ni.tools import cml_tools
 
     print(f"設定を読み込み中: configs/{args.config}/")
     topology_yaml, device_configs = _load_configs(args.config)
-    print(f"  topology.yaml: 読み込み完了")
-    print(f"  デバイス設定: {sorted(device_configs)} ({len(device_configs)} 台)")
+
+    topo_data = yaml.safe_load(topology_yaml)
+    topo_node_count = len(topo_data.get("lab", {}).get("nodes", []))
+
+    print(f"  topology.yaml: 読み込み完了 ({topo_node_count} ノード定義)")
+    if device_configs:
+        print(f"  デバイス設定: {sorted(device_configs)} ({len(device_configs)} 台, topology.yaml の embedded config を上書き)")
+    else:
+        print(f"  デバイス設定: なし（topology.yaml の embedded config を使用）")
 
     title = args.title or f"agentic-ni-{args.config}"
     print(f"\nCML にラボをデプロイ中...")
     print(f"  ラボ名  : {title}")
-    print(f"  ノード数: {len(device_configs)} 台")
+    print(f"  ノード数: {topo_node_count} 台（topology.yaml 定義）")
+    if not device_configs:
+        print(f"  ※ R*.cfg なし — topology.yaml 内の embedded config でデプロイします")
     print(f"  ※ 起動完了まで数分かかります...\n")
 
     try:

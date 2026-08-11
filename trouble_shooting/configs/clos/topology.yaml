@@ -462,33 +462,9 @@ nodes:
       timezone: Asia/Tokyo
       locale: en_US.UTF-8
 
-      # run apt-get update
-      # default false
-      package_update: true
-
-      # default false
-      package_upgrade: true
-
-      # reboot if required
-      package_reboot_if_required: true
-
-      # packages
-      packages:
-        - jq
-        - yq
-        - libxml2-utils  # xmllint
-        - curl
-        - wget
-        - git
-        - zip
-        - unzip
-        - make
-        - python3-pip
-        - python3-venv
-        - direnv
-
       # ens2: 192.168.100.1/30 (管理セグメント / Leaf1 直結)
       # ens3: DHCP (external-connector 経由でインターネット)
+      # packages は runcmd 内で netplan apply 後にインストールする（デフォルトルート確立後）
       write_files:
         - path: /etc/netplan/50-clos.yaml
           permissions: "0600"
@@ -510,6 +486,9 @@ nodes:
 
       runcmd:
         - netplan apply
+        # ens3 (DHCP) 経由でデフォルトルートが確立してからパッケージをインストール
+        - apt-get update -y
+        - DEBIAN_FRONTEND=noninteractive apt-get install -y jq yq libxml2-utils curl wget git zip unzip make python3-pip python3-venv direnv
         - curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
         - git clone https://github.com/takamitsu-iida/agentic-ni.git /home/cisco/agentic-ni
         - git -C /home/cisco/agentic-ni checkout feature/trouble-shooting
