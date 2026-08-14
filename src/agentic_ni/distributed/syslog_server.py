@@ -30,7 +30,7 @@ import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from agentic_ni.logger import get_logger
 
@@ -44,6 +44,12 @@ logger = get_logger(__name__)
 _PYATS_NOISE_PATTERNS = (
     "%SYS-5-CONFIG_I",
     "%SYS-5-LOG_CONFIG_CHANGE",
+)
+
+# ユーザーが設定可能なデフォルト無視パターン
+# SyslogServer / SyslogFileWatcher の ignore_patterns 引数で上書き可能
+DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
+    "%LINK-2-INTVULN",
 )
 
 # RFC 3164: <priority>timestamp hostname message
@@ -186,9 +192,11 @@ class SyslogServer:
     """UDP SYSLOG を受信して全デバイスエージェントにブロードキャストするサーバー。
 
     Args:
-        orchestrator:  SyslogEvent をブロードキャストする先の AgentOrchestrator。
-        host:          リッスンアドレス（デフォルト 0.0.0.0）。
-        port:          リッスンポート（デフォルト 514。1024以下は root 権限が必要）。
+        orchestrator:     SyslogEvent をブロードキャストする先の AgentOrchestrator。
+        host:             リッスンアドレス（デフォルト 0.0.0.0）。
+        port:             リッスンポート（デフォルト 514。1024以下は root 権限が必要）。
+        ignore_patterns:  含まれるメッセージを無視する文字列パターンのリスト。
+                          デフォルトは DEFAULT_IGNORE_PATTERNS。
     """
 
     def __init__(
@@ -196,10 +204,12 @@ class SyslogServer:
         orchestrator: "AgentOrchestrator",
         host: str = "0.0.0.0",
         port: int = 514,
+        ignore_patterns: Sequence[str] = DEFAULT_IGNORE_PATTERNS,
     ) -> None:
         self._orchestrator = orchestrator
         self._host = host
         self._port = port
+        self._ignore_patterns = tuple(ignore_patterns)
         self._transport: asyncio.BaseTransport | None = None
 
     async def start(self) -> None:
@@ -220,7 +230,8 @@ class SyslogServer:
 
     async def _on_syslog(self, parsed: ParsedSyslog, addr: tuple) -> None:
         """受信した SYSLOG をパースして全エージェントにブロードキャストする。"""
-        if any(pat in parsed.message for pat in _PYATS_NOISE_PATTERNS):
+        all_ignore = _PYATS_NOISE_PATTERNS + self._ignore_patterns
+        if any(pat in parsed.message for pat in all_ignore):
             logger.debug("SYSLOG抑制 [%s] %s: %s", addr[0], parsed.source_hostname, parsed.message[:100])
             return
         logger.info(
@@ -245,9 +256,11 @@ class SyslogFileWatcher:
     ログローテーション（inode 変化）にも対応。
 
     Args:
-        orchestrator:   SyslogEvent をブロードキャストする先の AgentOrchestrator。
-        path:           監視対象のログファイルパス。
-        poll_interval:  新着行のポーリング間隔（秒）。
+        orchestrator:     SyslogEvent をブロードキャストする先の AgentOrchestrator。
+        path:             監視対象のログファイルパス。
+        poll_interval:    新着行のポーリング間隔（秒）。
+        ignore_patterns:  含まれるメッセージを無視する文字列パターンのリスト。
+                          デフォルトは DEFAULT_IGNORE_PATTERNS。
     """
 
     def __init__(
@@ -255,10 +268,12 @@ class SyslogFileWatcher:
         orchestrator: "AgentOrchestrator",
         path: str,
         poll_interval: float = 0.5,
+        ignore_patterns: Sequence[str] = DEFAULT_IGNORE_PATTERNS,
     ) -> None:
         self._orchestrator = orchestrator
         self._path = Path(path)
         self._poll_interval = poll_interval
+        self._ignore_patterns = tuple(ignore_patterns)
         self._task: asyncio.Task | None = None
 
     async def start(self) -> None:
@@ -312,7 +327,8 @@ class SyslogFileWatcher:
         if parsed is None:
             logger.debug("SyslogFileWatcher: パース失敗: %r", line[:80])
             return
-        if any(pat in parsed.message for pat in _PYATS_NOISE_PATTERNS):
+        all_ignore = _PYATS_NOISE_PATTERNS + self._ignore_patterns
+        if any(pat in parsed.message for pat in all_ignore):
             logger.debug("SYSLOG抑制 [file] %s: %s", parsed.source_hostname, parsed.message[:100])
             return
         logger.info(

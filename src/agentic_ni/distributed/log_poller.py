@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Sequence
 
 from agentic_ni.logger import get_logger
 
@@ -28,11 +28,13 @@ class DeviceLogPoller:
     """装置のログバッファを定期ポーリングして新規 syslog を DeviceAgent へ注入する。
 
     Args:
-        device_name:   装置名（ログ表示用）。
-        run_command:   同期的に show コマンドを実行して出力文字列を返す callable。
-        agent:         イベントの注入先 DeviceAgent。
-        poll_interval: ポーリング間隔（秒）。デフォルト 10.0 秒。
-        command:       実行するコマンド。デフォルト "show logging".
+        device_name:      装置名（ログ表示用）。
+        run_command:      同期的に show コマンドを実行して出力文字列を返す callable。
+        agent:            イベントの注入先 DeviceAgent。
+        poll_interval:    ポーリング間隔（秒）。デフォルト 10.0 秒。
+        command:          実行するコマンド。デフォルト "show logging".
+        ignore_patterns:  含まれるメッセージを無視する文字列パターンのリスト。
+                          デフォルトは DEFAULT_IGNORE_PATTERNS（インポート元から変更可能）。
     """
 
     def __init__(
@@ -42,12 +44,14 @@ class DeviceLogPoller:
         agent: "DeviceAgent",
         poll_interval: float = 10.0,
         command: str = "show logging",
+        ignore_patterns: Sequence[str] = (),
     ) -> None:
         self._device_name = device_name
         self._run_command = run_command
         self._agent = agent
         self._poll_interval = poll_interval
         self._command = command
+        self._ignore_patterns = tuple(ignore_patterns)
         self._seen: set[str] = set()
         self._task: asyncio.Task | None = None
 
@@ -109,6 +113,9 @@ class DeviceLogPoller:
 
         for line in output.splitlines():
             if not _SYSLOG_LINE_RE.search(line):
+                continue
+            if self._ignore_patterns and any(pat in line for pat in self._ignore_patterns):
+                logger.debug("[%s] syslog無視: %s", self._device_name, line[:80])
                 continue
             key = _normalize(line)
             if key in self._seen:

@@ -27,6 +27,7 @@ import asyncio
 import json
 import os
 import re
+from collections.abc import Sequence
 from typing import Any, Callable
 
 from langchain_core.tools import StructuredTool
@@ -539,15 +540,18 @@ class CMLDeviceToolkit:
         agent: Any,
         poll_interval: float = 10.0,
         command: str = "show logging",
+        ignore_patterns: Sequence[str] | None = None,
     ) -> "DeviceLogPoller":
         """このツールキットが管理する装置のログポーラーを生成して返す。"""
         from agentic_ni.distributed.log_poller import DeviceLogPoller
+        from agentic_ni.distributed.syslog_server import DEFAULT_IGNORE_PATTERNS
         return DeviceLogPoller(
             device_name=self._device_name,
             run_command=self._run,
             agent=agent,
             poll_interval=poll_interval,
             command=command,
+            ignore_patterns=DEFAULT_IGNORE_PATTERNS if ignore_patterns is None else ignore_patterns,
         )
 
     def _make_apply_config(self) -> StructuredTool:

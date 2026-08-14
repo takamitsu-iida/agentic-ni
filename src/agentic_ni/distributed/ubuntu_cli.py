@@ -92,6 +92,34 @@ def _c(code: str, text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# SYSLOG 無視パターンファイルの読み込み
+# ---------------------------------------------------------------------------
+
+def _load_syslog_ignore_file(path: str | None) -> tuple[str, ...]:
+    """無視パターンファイルを読み込んでパターンのタプルを返す。
+
+    ファイル形式:
+      - 1 行 1 パターン
+      - # で始まる行はコメント
+      - 空行は無視
+    """
+    if not path:
+        return ()
+    try:
+        lines = _Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        logger.warning("SYSLOG 無視パターンファイルを読み込めませんでした: %s", e)
+        return ()
+    patterns = tuple(
+        line.strip()
+        for line in lines
+        if line.strip() and not line.strip().startswith("#")
+    )
+    logger.info("SYSLOG 無視パターン読み込み: %s  (%d 件)", path, len(patterns))
+    return patterns
+
+
+# ---------------------------------------------------------------------------
 # Human エスカレーション表示
 # ---------------------------------------------------------------------------
 
@@ -148,8 +176,9 @@ def _print_status(orchestrator: AgentOrchestrator, syslog_source: str) -> None:
     if sys.stdin.isatty():
         print()
         print(_c(_BOLD, "  ── 対話コマンド ──"))
-        print(f"  {_c(_CYAN, '  <装置名>: <指示・質問>')}  例: R1: 現在のOSPFネイバー状態を確認してください")
-        print(f"  {_c(_DIM, '  入力例: R1: show ip route  /  R2: コンフィグのBGP設定を見せて')}")
+        print(f"  {_c(_CYAN, '  <装置名>: <指示>')}          例: R1: 現在のOSPFネイバー状態を確認して")
+        print(f"  {_c(_CYAN, '  <装置名>,<装置名>,...: <指示>')}  例: R1,R2: show ip route を確認して")
+        print(f"  {_c(_CYAN, '  ALL: <指示>')}               例: ALL: BGP セッションを全台確認して")
     print()
 
 
@@ -273,6 +302,14 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="ログレベル（デフォルト: INFO）",
     )
+    parser.add_argument(
+        "--syslog-ignore-file", metavar="FILE",
+        help=(
+            "無視する SYSLOG パターンを列挙したテキストファイルのパス。"
+            "1行1パターン、# でコメント。"
+            "--config 使用時は設定ディレクトリ内の syslog_ignore.txt を自動検出する。"
+        ),
+    )
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(0)
@@ -290,6 +327,10 @@ def main() -> None:
         testbed_path = config_dir / "testbed.yaml"
         if testbed_path.exists() and not args.testbed:
             args.testbed = str(testbed_path)
+        # 設定ディレクトリ内の syslog_ignore.txt を自動検出
+        auto_ignore = config_dir / "syslog_ignore.txt"
+        if auto_ignore.exists() and not args.syslog_ignore_file:
+            args.syslog_ignore_file = str(auto_ignore)
     elif not args.topology:
         parser.error("--config または --topology のいずれかを指定してください")
 
@@ -356,14 +397,21 @@ async def _async_main(args: Any) -> None:
     loop.add_signal_handler(signal.SIGINT, _on_sigint)
 
     # SYSLOG ソース（ファイル監視 or UDP 直接受信）
+    from agentic_ni.distributed.syslog_server import DEFAULT_IGNORE_PATTERNS
+    ignore_patterns = DEFAULT_IGNORE_PATTERNS + _load_syslog_ignore_file(args.syslog_ignore_file)
     if args.syslog_file:
-        syslog_source = SyslogFileWatcher(orchestrator=orchestrator, path=args.syslog_file)
+        syslog_source = SyslogFileWatcher(
+            orchestrator=orchestrator,
+            path=args.syslog_file,
+            ignore_patterns=ignore_patterns,
+        )
         syslog_source_str = f"ファイル {args.syslog_file}"
     else:
         syslog_source = SyslogServer(
             orchestrator=orchestrator,
             host=args.syslog_host,
             port=args.syslog_port,
+            ignore_patterns=ignore_patterns,
         )
         syslog_source_str = f"UDP {args.syslog_port}"
 
@@ -460,17 +508,38 @@ async def _run_human_input_loop(
             )
             continue
 
-        device_name, _, request = line.partition(":")
-        device_name = device_name.strip()
+        target_part, _, request = line.partition(":")
+        target_part = target_part.strip()
         request = request.strip()
         if not request:
             continue
 
-        try:
-            await orchestrator.send_human_command(device_name, request)
-            print(
-                f"  {_c(_DIM, '→')} {_c(_BOLD, f'Agent-{device_name}')} に送信しました: "
-                f"{_c(_DIM, request[:60])}"
-            )
-        except KeyError as exc:
-            print(f"  {_c(_RED, '[!]')} {exc}")
+        # ALL: <指示> → 全エージェントに一括送信
+        if target_part.upper() == "ALL":
+            agent_ids = [
+                aid.removeprefix("Agent-")
+                for aid in orchestrator.get_all_agents()
+            ]
+        else:
+            # R1,R2,R3: <指示> → カンマ区切りで複数指定
+            agent_ids = [s.strip() for s in target_part.split(",") if s.strip()]
+
+        if len(agent_ids) == 1:
+            try:
+                await orchestrator.send_human_command(agent_ids[0], request)
+                print(
+                    f"  {_c(_DIM, '→')} {_c(_BOLD, f'Agent-{agent_ids[0]}')} に送信しました: "
+                    f"{_c(_DIM, request[:60])}"
+                )
+            except KeyError as exc:
+                print(f"  {_c(_RED, '[!]')} {exc}")
+        else:
+            errors = await orchestrator.send_human_command_many(agent_ids, request)
+            if agent_ids:
+                label = ", ".join(f"Agent-{a}" for a in agent_ids)
+                print(
+                    f"  {_c(_DIM, '→')} {_c(_BOLD, label)} に並列送信しました: "
+                    f"{_c(_DIM, request[:60])}"
+                )
+            for err in errors:
+                print(f"  {_c(_RED, '[!]')} {err}")

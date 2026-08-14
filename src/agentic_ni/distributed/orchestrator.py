@@ -449,6 +449,26 @@ class AgentOrchestrator:
             )
         await self._agents[agent_id].inject_human_command(request)
 
+    async def send_human_command_many(self, agent_ids: list[str], request: str) -> list[str]:
+        """複数エージェントに同一の指示・質問を並列送信する。
+
+        Returns:
+            送信に失敗したエージェント ID のリスト（エラーメッセージ付き）。
+        """
+        errors: list[str] = []
+        tasks = []
+        resolved: list[str] = []
+        for aid in agent_ids:
+            norm = aid if aid.startswith("Agent-") else f"Agent-{aid}"
+            if norm not in self._agents:
+                errors.append(f"{norm!r} が見つかりません")
+                continue
+            resolved.append(norm)
+            tasks.append(self._agents[norm].inject_human_command(request))
+        if tasks:
+            await asyncio.gather(*tasks)
+        return errors
+
     async def run_approval_loop(self, shutdown_event: asyncio.Event) -> None:
         """設定変更承認リクエストを監視して CLI でユーザーに確認する。
 

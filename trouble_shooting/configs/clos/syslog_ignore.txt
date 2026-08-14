@@ -1,0 +1,10 @@
+# SYSLOG 無視パターン一覧
+# 1 行 1 パターン。メッセージ文字列にパターンが含まれていれば無視する。
+# このファイルは DEFAULT_IGNORE_PATTERNS（%LINK-2-INTVULN）に追加される形で適用される。
+
+# --- Cisco IOS: 通常運用で発生する情報系ノイズ ---
+%SYS-5-CONFIG_I
+%SYS-5-LOG_CONFIG_CHANGE
+
+# --- インターフェース脆弱性通知（デフォルト無視に含まれるが明示的に記載）---
+# %LINK-2-INTVULN  # DEFAULT_IGNORE_PATTERNS で既に無視されている
