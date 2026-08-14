@@ -249,7 +249,21 @@ async def _async_main(args: argparse.Namespace) -> None:
             f"  log-poll={args.log_poll_interval}s"
             f"  (CMLStateWatcher 無効)"
         )
+        print(f"  {_c(_DIM, 'CML でリンクまたはノードを停止するとエージェントが自動的に動き出します。')}")
+    else:
+        print(
+            f"  {_c(_YELLOW + _BOLD, '📋 ログ直接監視モード')}"
+            f"  log-poll={args.log_poll_interval}s"
+            f"  (CMLStateWatcher 無効)"
+        )
         print(f"  {_c(_DIM, '各エージェントが自装置の show logging を直接ポーリングします。')}")
+
+    # 対話モードのヘルプを表示
+    if sys.stdin.isatty():
+        print()
+        print(_c(_BOLD, "  ── 対話コマンド ──"))
+        print(f"  {_c(_CYAN, '  <装置名>: <指示・質問>')}  例: R1: 現在のOSPFネイバー状態を確認してください")
+        print(f"  {_c(_DIM, '  入力例: R1: show ip route  /  R2: BGPセッションの状態は？')}")
     print(f"  {_c(_DIM, 'Ctrl+C で停止します。')}")
     print()
 
@@ -262,14 +276,102 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
+    tasks = []
+    if sys.stdin.isatty():
+        tasks.append(asyncio.create_task(
+            _run_human_input_loop(orchestrator, shutdown_event),
+            name="human-input",
+        ))
+    tasks.append(asyncio.create_task(
+        _drain_human_responses(orchestrator, shutdown_event),
+        name="human-responses",
+    ))
+
     try:
         await shutdown_event.wait()
     finally:
+        for t in tasks:
+            t.cancel()
         if watcher is not None:
             await watcher.stop()
         await orchestrator.stop_all()
         await bus.close()
         print(f"  {_c(_GREEN, '✓')} シャットダウン完了。")
+
+
+# ---------------------------------------------------------------------------
+# 対話入力・レスポンス表示
+# ---------------------------------------------------------------------------
+
+async def _drain_human_responses(
+    orchestrator: AgentOrchestrator, shutdown_event: asyncio.Event
+) -> None:
+    """human_queue からレスポンスを取り出して表示する。"""
+    while not shutdown_event.is_set():
+        try:
+            msg = await asyncio.wait_for(orchestrator.human_queue.get(), timeout=0.5)
+        except asyncio.TimeoutError:
+            continue
+        from_agent = msg.get("from_agent", "?")
+        content = msg.get("content", "")
+        color = _AGENT_COLORS.get(from_agent, _WHITE)
+        width = 64
+        print()
+        print(_c(_GREEN + _BOLD, "  " + "─" * width))
+        print(
+            f"  {_c(_GREEN + _BOLD, '💬  エージェント応答')}  "
+            f"{_c(color + _BOLD, from_agent)}"
+        )
+        print(_c(_GREEN + _BOLD, "  " + "─" * width))
+        for line in content.strip().splitlines():
+            print(f"  {line}")
+        print(_c(_GREEN + _BOLD, "  " + "─" * width))
+        print()
+        orchestrator.human_queue.task_done()
+
+
+async def _run_human_input_loop(
+    orchestrator: AgentOrchestrator, shutdown_event: asyncio.Event
+) -> None:
+    """標準入力から人間コマンドを読み取り、対応するエージェントに送る。
+
+    入力フォーマット: ``<装置名>: <指示・質問>``
+    例: ``R1: 現在の OSPF ネイバー状態を確認してください``
+    """
+    loop = asyncio.get_event_loop()
+    while not shutdown_event.is_set():
+        try:
+            raw = await loop.run_in_executor(None, sys.stdin.readline)
+        except asyncio.CancelledError:
+            break
+        if not raw:
+            break  # EOF
+        line = raw.strip()
+        if not line:
+            continue
+
+        # "<装置名>: <指示>" 形式のパース
+        if ":" not in line:
+            print(
+                f"  {_c(_RED, '[!]')} フォーマットエラー: "
+                f"'{_c(_BOLD, '<装置名>: <指示>')}' の形式で入力してください。"
+            )
+            continue
+
+        device_name, _, request = line.partition(":")
+        device_name = device_name.strip()
+        request = request.strip()
+        if not request:
+            continue
+
+        try:
+            await orchestrator.send_human_command(device_name, request)
+            print(
+                f"  {_c(_DIM, '→')} {_c(_BOLD, f'Agent-{device_name}')} に送信しました: "
+                f"{_c(_DIM, request[:60])}"
+            )
+        except KeyError as exc:
+            print(f"  {_c(_RED, '[!]')} {exc}")
 
 
 if __name__ == "__main__":

@@ -306,6 +306,22 @@ class AgentOrchestrator:
     # Human 承認ワークフロー
     # ------------------------------------------------------------------
 
+    async def send_human_command(self, agent_id: str, request: str) -> None:
+        """指定エージェントに人間からの指示・質問を送る。
+
+        ``agent_id`` には "Agent-R1" のようなエージェント ID、
+        または "R1" のような装置名のどちらでも指定できる。
+        """
+        # "R1" → "Agent-R1" に正規化
+        if not agent_id.startswith("Agent-"):
+            agent_id = f"Agent-{agent_id}"
+        if agent_id not in self._agents:
+            known = list(self._agents.keys())
+            raise KeyError(
+                f"エージェント {agent_id!r} が見つかりません。起動中: {known}"
+            )
+        await self._agents[agent_id].inject_human_command(request)
+
     async def run_approval_loop(self, shutdown_event: asyncio.Event) -> None:
         """設定変更承認リクエストを監視して CLI でユーザーに確認する。
 

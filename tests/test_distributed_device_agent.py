@@ -12,7 +12,10 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from agentic_ni.distributed.bus import InMemoryBus
 from agentic_ni.distributed.device_agent import (
+    ConnectivityLostEvent,
+    ConnectivityRestoredEvent,
     DeviceAgent,
+    HumanCommandEvent,
     PollEvent,
     SyslogEvent,
     _event_source,
@@ -20,7 +23,7 @@ from agentic_ni.distributed.device_agent import (
     parse_agent_output,
 )
 from agentic_ni.distributed.incident import DeviceQueryRequest, DeviceQueryResponse
-from agentic_ni.distributed.memory import DeviceMemory, NeighborInfo
+from agentic_ni.distributed.memory import DesiredState, DeviceMemory, NeighborInfo
 from agentic_ni.distributed.prompts import build_device_prompt
 
 
@@ -316,3 +319,234 @@ class TestInjectPollEvent:
         await agent.stop()
 
         assert not human_q.empty()
+
+
+# ---------------------------------------------------------------------------
+# DesiredState のテスト
+# ---------------------------------------------------------------------------
+
+class TestDesiredState:
+    def test_to_text_empty(self):
+        assert DesiredState().to_text() == "（期待状態の定義なし）"
+
+    def test_to_text_with_interfaces(self):
+        ds = DesiredState(interfaces={"GigabitEthernet0/1": "up", "GigabitEthernet0/2": "up"})
+        text = ds.to_text()
+        assert "GigabitEthernet0/1" in text
+        assert "up" in text
+
+    def test_to_text_with_all_fields(self):
+        ds = DesiredState(
+            interfaces={"Gi0/1": "up"},
+            routing_neighbors=["OSPF: 10.0.0.2", "OSPF: 10.0.0.3"],
+            routes=["0.0.0.0/0 via 10.0.0.1"],
+            notes="フルメッシュ構成",
+        )
+        text = ds.to_text()
+        assert "OSPF: 10.0.0.2" in text
+        assert "0.0.0.0/0" in text
+        assert "フルメッシュ構成" in text
+
+    def test_device_memory_default_desired_state(self):
+        mem = DeviceMemory(device_name="R1")
+        assert isinstance(mem.desired_state, DesiredState)
+
+    def test_device_memory_custom_desired_state(self):
+        ds = DesiredState(interfaces={"Gi0/1": "up"})
+        mem = DeviceMemory(device_name="R1", desired_state=ds)
+        assert mem.desired_state.interfaces == {"Gi0/1": "up"}
+
+    def test_desired_state_embedded_in_prompt(self):
+        """desired_state が build_device_prompt の出力に含まれること。"""
+        from agentic_ni.distributed.prompts import build_device_prompt
+        ds = DesiredState(interfaces={"GigabitEthernet0/1": "up"})
+        prompt = build_device_prompt(
+            device_name="R1",
+            device_type="router",
+            management_ip="192.168.0.1",
+            desired_state=ds,
+        )
+        assert "GigabitEthernet0/1" in prompt
+
+    async def test_desired_state_passed_to_agent_via_constructor(self):
+        """DeviceAgent の desired_state パラメータが memory に反映されること。"""
+        ds = DesiredState(interfaces={"Gi0/0": "up"}, notes="テスト用ベースライン")
+        bus = InMemoryBus()
+        mem = DeviceMemory(device_name="R1")
+        llm = _MockLLM(["TO: LOG | MSG: ok"])
+        agent = DeviceAgent(
+            device_name="R1",
+            agent_id="Agent-R1",
+            bus=bus,
+            memory=mem,
+            llm=llm,
+            desired_state=ds,
+        )
+        assert agent._memory.desired_state.notes == "テスト用ベースライン"
+
+    async def test_desired_state_included_in_llm_system_prompt(self):
+        """期待状態がシステムプロンプトに含まれた状態で LLM が呼ばれること。"""
+        human_q: asyncio.Queue = asyncio.Queue()
+        ds = DesiredState(
+            interfaces={"GigabitEthernet0/1": "up"},
+            routing_neighbors=["OSPF: 10.0.0.2"],
+        )
+        bus = InMemoryBus()
+        mem = DeviceMemory(device_name="R1", desired_state=ds)
+        llm = _MockLLM(["TO: LOG | MSG: 正常状態と一致"])
+        agent = DeviceAgent(
+            device_name="R1",
+            agent_id="Agent-R1",
+            bus=bus,
+            memory=mem,
+            llm=llm,
+            human_queue=human_q,
+        )
+        await agent.start()
+        await agent.inject_event(PollEvent(source="run_show", content="show ip interface brief"))
+        await agent.wait_idle()
+        await agent.stop()
+
+        # LLM に渡されたシステムプロンプトに期待状態が含まれること
+        system_msg = llm.received_messages[0][0]
+        assert "GigabitEthernet0/1" in system_msg.content
+        assert "OSPF: 10.0.0.2" in system_msg.content
+
+
+# ---------------------------------------------------------------------------
+# ConnectivityLostEvent / ConnectivityRestoredEvent のテスト
+# ---------------------------------------------------------------------------
+
+class TestConnectivityEvents:
+    async def test_connectivity_lost_reports_to_human(self):
+        """ConnectivityLostEvent が human_queue に直接報告されること。"""
+        human_q: asyncio.Queue = asyncio.Queue()
+        agent, bus, llm = _make_agent([], human_queue=human_q)
+        await agent.start()
+
+        await agent.inject_event(ConnectivityLostEvent(host="192.168.0.1", port=22))
+        await agent.wait_idle()
+        await agent.stop()
+
+        assert not human_q.empty()
+        msg = human_q.get_nowait()
+        assert msg["from_agent"] == "Agent-R1"
+        assert "途絶" in msg["content"]
+        assert "192.168.0.1" in msg["content"]
+
+    async def test_connectivity_restored_reports_to_human(self):
+        """ConnectivityRestoredEvent が human_queue に直接報告されること。"""
+        human_q: asyncio.Queue = asyncio.Queue()
+        agent, bus, llm = _make_agent([], human_queue=human_q)
+        await agent.start()
+
+        await agent.inject_event(ConnectivityRestoredEvent(host="192.168.0.1", port=22))
+        await agent.wait_idle()
+        await agent.stop()
+
+        assert not human_q.empty()
+        msg = human_q.get_nowait()
+        assert "復旧" in msg["content"]
+
+    async def test_connectivity_lost_does_not_invoke_llm(self):
+        """ConnectivityLostEvent は LLM を呼ばないこと。"""
+        human_q: asyncio.Queue = asyncio.Queue()
+        agent, bus, llm = _make_agent(["unused"], human_queue=human_q)
+        await agent.start()
+
+        await agent.inject_event(ConnectivityLostEvent(host="10.0.0.1", port=22))
+        await agent.wait_idle()
+        await agent.stop()
+
+        assert llm.call_count == 0
+
+    def test_event_summary_connectivity_lost(self):
+        assert "LOST" in _event_summary(ConnectivityLostEvent(host="10.0.0.1", port=22))
+
+    def test_event_summary_connectivity_restored(self):
+        assert "RESTORED" in _event_summary(ConnectivityRestoredEvent(host="10.0.0.1", port=22))
+
+    def test_event_source_connectivity(self):
+        assert _event_source(ConnectivityLostEvent(host="x", port=22)) == "connectivity"
+        assert _event_source(ConnectivityRestoredEvent(host="x", port=22)) == "connectivity"
+
+
+# ---------------------------------------------------------------------------
+# HumanCommandEvent のテスト
+# ---------------------------------------------------------------------------
+
+class TestHumanCommandEvent:
+    async def test_human_command_routes_to_human_queue(self):
+        """inject_human_command の結果が human_queue に届くこと。"""
+        human_q: asyncio.Queue = asyncio.Queue()
+        agent, bus, llm = _make_agent(
+            ["TO: HUMAN | MSG: GigabitEthernet0/1 は up です。"],
+            human_queue=human_q,
+        )
+        await agent.start()
+        await agent.inject_human_command("GigabitEthernet0/1 の状態を確認してください")
+        await agent.wait_idle()
+        await agent.stop()
+
+        assert not human_q.empty()
+        msg = human_q.get_nowait()
+        assert msg["from_agent"] == "Agent-R1"
+        assert "GigabitEthernet0/1" in msg["content"]
+
+    async def test_human_command_invokes_llm(self):
+        """HumanCommandEvent は LLM を呼ぶこと。"""
+        human_q: asyncio.Queue = asyncio.Queue()
+        agent, bus, llm = _make_agent(
+            ["TO: HUMAN | MSG: 確認しました。"],
+            human_queue=human_q,
+        )
+        await agent.start()
+        await agent.inject_human_command("現在のルーティングテーブルを確認してください")
+        await agent.wait_idle()
+        await agent.stop()
+
+        assert llm.call_count == 1
+
+    async def test_human_command_user_message_contains_request(self):
+        """人間の指示文がユーザーメッセージに含まれること。"""
+        human_q: asyncio.Queue = asyncio.Queue()
+        agent, bus, llm = _make_agent(["TO: HUMAN | MSG: ok"], human_queue=human_q)
+        await agent.start()
+        await agent.inject_human_command("OSPFネイバーが落ちているのはなぜですか？")
+        await agent.wait_idle()
+        await agent.stop()
+
+        user_msg = llm.received_messages[0][1]  # index 1 = HumanMessage
+        assert "OSPFネイバーが落ちているのはなぜですか？" in user_msg.content
+
+    async def test_human_command_no_human_queue_does_not_raise(self):
+        """human_queue が None でもクラッシュしないこと。"""
+        agent, bus, llm = _make_agent(["TO: HUMAN | MSG: ok"])
+        await agent.start()
+        await agent.inject_human_command("テスト")
+        await agent.wait_idle()
+        await agent.stop()  # 例外なく完了すること
+
+    async def test_human_command_fallback_when_no_to_format(self):
+        """TO: フォーマットなしの LLM 応答も human_queue に届くこと。"""
+        human_q: asyncio.Queue = asyncio.Queue()
+        agent, bus, llm = _make_agent(
+            ["インターフェースはすべて up です。"],
+            human_queue=human_q,
+        )
+        await agent.start()
+        await agent.inject_human_command("状態を確認して")
+        await agent.wait_idle()
+        await agent.stop()
+
+        assert not human_q.empty()
+        msg = human_q.get_nowait()
+        assert "up" in msg["content"]
+
+    def test_event_summary_human_command(self):
+        ev = HumanCommandEvent(request="OSPFの状態を確認してください")
+        assert "HUMAN" in _event_summary(ev)
+        assert "OSPF" in _event_summary(ev)
+
+    def test_event_source_human_command(self):
+        assert _event_source(HumanCommandEvent(request="テスト")) == "human"

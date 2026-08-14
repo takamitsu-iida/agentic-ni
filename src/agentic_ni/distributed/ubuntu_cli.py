@@ -121,7 +121,13 @@ def _print_status(orchestrator: AgentOrchestrator, syslog_source: str) -> None:
             print(f"    隣接: {neighbors}")
     print(_c(_BOLD, "=" * 60))
     print(_c(_DIM, "\n  ネットワーク装置から SYSLOG を受信すると自動的に調査を開始します。"))
-    print(_c(_DIM, "  終了するには Ctrl+C を押してください。\n"))
+    print(_c(_DIM, "  終了するには Ctrl+C を押してください。"))
+    if sys.stdin.isatty():
+        print()
+        print(_c(_BOLD, "  ── 対話コマンド ──"))
+        print(f"  {_c(_CYAN, '  <装置名>: <指示・質問>')}  例: R1: 現在のOSPFネイバー状態を確認してください")
+        print(f"  {_c(_DIM, '  入力例: R1: show ip route  /  R2: コンフィグのBGP設定を見せて')}")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +150,12 @@ def main() -> None:
             "  # UDP 直接受信（root 権限が必要）\n"
             "  sudo agentic-ni-ubuntu --config clos --syslog-file ''\n\n"
             "  # テスト（モックツール + 非特権ポート）\n"
-            "  agentic-ni-ubuntu --config clos --syslog-port 5140 --mock-tools\n"
+            "  agentic-ni-ubuntu --config clos --syslog-port 5140 --mock-tools\n\n"
+            "対話コマンド（起動後に入力）:\n"
+            "  <装置名>: <指示・質問>\n"
+            "  例: R1: 現在のOSPFネイバー状態を確認してください\n"
+            "  例: R2: show ip bgp summary の結果を教えて\n"
+            "  例: R1: GigabitEthernet0/1 がダウンしている原因を調べて\n"
         ),
     )
     parser.add_argument(
@@ -296,10 +307,20 @@ async def _async_main(args: Any) -> None:
         await syslog_source.start()
         _print_status(orchestrator, syslog_source_str)
 
-        await asyncio.gather(
-            orchestrator.run_approval_loop(shutdown_event),
-            _wait_for_shutdown(shutdown_event),
-        )
+        tasks = [asyncio.create_task(
+            orchestrator.run_approval_loop(shutdown_event), name="approval"
+        )]
+        if sys.stdin.isatty():
+            tasks.append(asyncio.create_task(
+                _run_human_input_loop(orchestrator, shutdown_event), name="human-input"
+            ))
+        tasks.append(asyncio.create_task(
+            _drain_human_responses(orchestrator, shutdown_event), name="human-responses"
+        ))
+        tasks.append(asyncio.create_task(
+            _wait_for_shutdown(shutdown_event), name="shutdown-wait"
+        ))
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     finally:
         await syslog_source.stop()
@@ -310,3 +331,68 @@ async def _async_main(args: Any) -> None:
 
 async def _wait_for_shutdown(shutdown_event: asyncio.Event) -> None:
     await shutdown_event.wait()
+
+
+async def _drain_human_responses(
+    orchestrator: AgentOrchestrator, shutdown_event: asyncio.Event
+) -> None:
+    """human_queue からエージェントの回答を取り出して表示する。"""
+    while not shutdown_event.is_set():
+        try:
+            msg = await asyncio.wait_for(orchestrator.human_queue.get(), timeout=0.5)
+        except asyncio.TimeoutError:
+            continue
+        from_agent = msg.get("from_agent", "?")
+        content = msg.get("content", "")
+        width = 60
+        print(f"\n{_c(_BOLD + _GREEN, '─' * width)}")
+        print(f"{_c(_BOLD + _GREEN, '  💬  エージェント応答')}  {_c(_CYAN + _BOLD, from_agent)}")
+        print(_c(_BOLD + _GREEN, "─" * width))
+        for line in content.strip().splitlines():
+            print(f"  {line}")
+        print(_c(_BOLD + _GREEN, "─" * width))
+        print()
+        orchestrator.human_queue.task_done()
+
+
+async def _run_human_input_loop(
+    orchestrator: AgentOrchestrator, shutdown_event: asyncio.Event
+) -> None:
+    """標準入力から人間コマンドを読み取り、対応するエージェントに送る。
+
+    入力フォーマット: ``<装置名>: <指示・質問>``
+    例: ``R1: 現在の OSPF ネイバー状態を確認してください``
+    """
+    loop = asyncio.get_event_loop()
+    while not shutdown_event.is_set():
+        try:
+            raw = await loop.run_in_executor(None, sys.stdin.readline)
+        except asyncio.CancelledError:
+            break
+        if not raw:
+            break  # EOF
+        line = raw.strip()
+        if not line:
+            continue
+
+        if ":" not in line:
+            print(
+                f"  {_c(_RED, '[!]')} フォーマットエラー: "
+                f"'{_c(_BOLD, '<装置名>: <指示>')}' の形式で入力してください。"
+            )
+            continue
+
+        device_name, _, request = line.partition(":")
+        device_name = device_name.strip()
+        request = request.strip()
+        if not request:
+            continue
+
+        try:
+            await orchestrator.send_human_command(device_name, request)
+            print(
+                f"  {_c(_DIM, '→')} {_c(_BOLD, f'Agent-{device_name}')} に送信しました: "
+                f"{_c(_DIM, request[:60])}"
+            )
+        except KeyError as exc:
+            print(f"  {_c(_RED, '[!]')} {exc}")

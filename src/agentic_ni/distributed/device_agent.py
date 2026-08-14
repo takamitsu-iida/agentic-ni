@@ -23,9 +23,10 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agentic_ni.distributed.bus import MessageBus
+from agentic_ni.distributed.connectivity_monitor import ConnectivityMonitor
 from agentic_ni.distributed.incident import DeviceQueryRequest, DeviceQueryResponse
 from agentic_ni.distributed.log_poller import DeviceLogPoller
-from agentic_ni.distributed.memory import DeviceMemory
+from agentic_ni.distributed.memory import DesiredState, DeviceMemory
 from agentic_ni.distributed.prompts import build_device_prompt
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,27 @@ class PollEvent:
     content: str   # コマンド出力テキスト
 
 
-AgentEvent = Union[SyslogEvent, PollEvent]
+@dataclass
+class ConnectivityLostEvent:
+    """担当ノードとの通信断を通知するイベント。"""
+    host: str
+    port: int
+
+
+@dataclass
+class ConnectivityRestoredEvent:
+    """担当ノードとの通信復旧を通知するイベント。"""
+    host: str
+    port: int
+
+
+@dataclass
+class HumanCommandEvent:
+    """人間オペレーターからの直接指示・質問イベント。"""
+    request: str  # 人間からの指示・質問テキスト
+
+
+AgentEvent = Union[SyslogEvent, PollEvent, ConnectivityLostEvent, ConnectivityRestoredEvent, HumanCommandEvent]
 
 
 # ---------------------------------------------------------------------------
@@ -127,17 +148,27 @@ class DeviceAgent:
         tools: list[Any] | None = None,
         human_queue: asyncio.Queue | None = None,
         log_poller: DeviceLogPoller | None = None,
+        connectivity_port: int = 22,
+        connectivity_poll_interval: float = 30.0,
+        connectivity_timeout: float = 5.0,
+        desired_state: DesiredState | None = None,
     ) -> None:
         self.device_name = device_name
         self.agent_id = agent_id
 
         self._bus = bus
         self._memory = memory
+        if desired_state is not None:
+            self._memory.desired_state = desired_state
         self._device_type = device_type
         self._management_ip = management_ip
         self._tools = tools or []
         self._human_queue = human_queue
         self._log_poller = log_poller
+        self._connectivity_port = connectivity_port
+        self._connectivity_poll_interval = connectivity_poll_interval
+        self._connectivity_timeout = connectivity_timeout
+        self._connectivity_monitor: ConnectivityMonitor | None = None
 
         # LLM は遅延初期化（テスト時は外部から注入）
         self._llm: BaseChatModel | None = llm
@@ -159,6 +190,17 @@ class DeviceAgent:
         self._task = asyncio.create_task(self._run_loop(), name=f"agent-{self.agent_id}")
         if self._log_poller:
             await self._log_poller.start()
+        if self._management_ip:
+            self._connectivity_monitor = ConnectivityMonitor(
+                device_name=self.device_name,
+                host=self._management_ip,
+                port=self._connectivity_port,
+                poll_interval=self._connectivity_poll_interval,
+                timeout=self._connectivity_timeout,
+                on_lost=self._on_connectivity_lost,
+                on_restored=self._on_connectivity_restored,
+            )
+            await self._connectivity_monitor.start()
         logger.info("[%s] 起動しました。", self.agent_id)
 
     async def stop(self) -> None:
@@ -172,11 +214,33 @@ class DeviceAgent:
                 pass
         if self._log_poller:
             await self._log_poller.stop()
+        if self._connectivity_monitor:
+            await self._connectivity_monitor.stop()
         logger.info("[%s] 停止しました。", self.agent_id)
+
+    # ------------------------------------------------------------------
+    # 通信監視コールバック
+    # ------------------------------------------------------------------
+
+    async def _on_connectivity_lost(self) -> None:
+        """ConnectivityMonitor から呼ばれる通信断コールバック。"""
+        await self._event_queue.put(
+            ConnectivityLostEvent(host=self._management_ip, port=self._connectivity_port)
+        )
+
+    async def _on_connectivity_restored(self) -> None:
+        """ConnectivityMonitor から呼ばれる通信復旧コールバック。"""
+        await self._event_queue.put(
+            ConnectivityRestoredEvent(host=self._management_ip, port=self._connectivity_port)
+        )
 
     async def inject_event(self, event: AgentEvent) -> None:
         """外部からイベントを注入する（PollEvent のみ）。"""
         await self._event_queue.put(event)
+
+    async def inject_human_command(self, request: str) -> None:
+        """人間オペレーターからの指示・質問をイベントキューに積む。"""
+        await self._event_queue.put(HumanCommandEvent(request=request))
 
     async def wait_idle(self) -> None:
         """キューが空になるまで待機する（テスト・同期待ち用）。"""
@@ -206,7 +270,125 @@ class DeviceAgent:
     # ------------------------------------------------------------------
 
     async def _process_event(self, event: AgentEvent) -> None:
-        """PollEvent を LLM に渡して推論し、ツール呼び出しループ後に結果をルーティングする。"""
+        """イベント種別に応じて処理をディスパッチする。"""
+        if isinstance(event, ConnectivityLostEvent):
+            await self._handle_connectivity_lost(event)
+            return
+        if isinstance(event, ConnectivityRestoredEvent):
+            await self._handle_connectivity_restored(event)
+            return
+        if isinstance(event, HumanCommandEvent):
+            await self._handle_human_command(event)
+            return
+        await self._process_poll_or_syslog(event)
+
+    async def _handle_connectivity_lost(self, event: ConnectivityLostEvent) -> None:
+        """通信断を記録し、LLM を介さず直接人間に報告する。"""
+        msg = (
+            f"[{self.device_name}] 担当ノードとの通信が途絶えました。"
+            f" 管理 IP: {event.host}:{event.port}"
+        )
+        self._memory.add_status("connectivity", msg)
+        logger.warning("[%s] %s", self.agent_id, msg)
+        if self._human_queue is not None:
+            await self._human_queue.put({"from_agent": self.agent_id, "content": msg})
+
+    async def _handle_connectivity_restored(self, event: ConnectivityRestoredEvent) -> None:
+        """通信復旧を記録し、LLM を介さず直接人間に報告する。"""
+        msg = (
+            f"[{self.device_name}] 担当ノードとの通信が復旧しました。"
+            f" 管理 IP: {event.host}:{event.port}"
+        )
+        self._memory.add_status("connectivity", msg)
+        logger.info("[%s] %s", self.agent_id, msg)
+        if self._human_queue is not None:
+            await self._human_queue.put({"from_agent": self.agent_id, "content": msg})
+
+    async def _handle_human_command(self, event: HumanCommandEvent) -> None:
+        """人間からの指示・質問を LLM + ツールで処理し、結果を human_queue に返す。"""
+        self._memory.add_status("human", event.request[:200])
+        logger.info("[%s] 人間からの指示を受信: %s", self.agent_id, event.request[:80])
+
+        messages = self._build_human_command_messages(event.request)
+        llm = self._get_llm()
+        llm_with_tools = llm.bind_tools(self._tools) if self._tools else llm
+
+        for _turn in range(_MAX_TOOL_CALLS):
+            logger.info("[%s] LLM問い合わせ中 (ターン %d/%d)...", self.agent_id, _turn + 1, _MAX_TOOL_CALLS)
+            try:
+                response = await llm_with_tools.ainvoke(messages)
+            except Exception:
+                logger.exception("[%s] LLM 呼び出しに失敗しました。", self.agent_id)
+                if self._human_queue is not None:
+                    await self._human_queue.put({
+                        "from_agent": self.agent_id,
+                        "content": f"[{self.device_name}] LLM エラーにより処理できませんでした。",
+                    })
+                return
+
+            messages.append(response)
+            tool_calls = getattr(response, "tool_calls", None)
+
+            if not tool_calls:
+                output_text: str = (
+                    response.content if hasattr(response, "content") else str(response)
+                )
+                # 人間コマンドの応答は常に human_queue へ直接送る
+                await self._deliver_to_human(output_text)
+                return
+
+            tool_names = [tc.get("name", "?") for tc in tool_calls]
+            logger.info("[%s] ツール呼び出し: %s", self.agent_id, tool_names)
+            from langchain_core.messages import ToolMessage
+            for tc in tool_calls:
+                result = await self._execute_tool(tc)
+                messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
+
+        logger.warning("[%s] ツール上限(%d)に達しました。中間結果を返します。", self.agent_id, _MAX_TOOL_CALLS)
+        if self._human_queue is not None:
+            await self._human_queue.put({
+                "from_agent": self.agent_id,
+                "content": f"[{self.device_name}] ツール呼び出し上限に達しました。調査を中断します。",
+            })
+
+    async def _deliver_to_human(self, text: str) -> None:
+        """LLM 出力を解析し、HUMAN 宛メッセージを human_queue に届ける。"""
+        delivered = False
+        for target, content in parse_agent_output(text):
+            if target.upper() in ("HUMAN", "LOG", "COORDINATOR"):
+                if self._human_queue is not None and target.upper() != "LOG":
+                    await self._human_queue.put({"from_agent": self.agent_id, "content": content})
+                    delivered = True
+                elif target.upper() == "LOG":
+                    self._memory.add_status("llm", content)
+        # フォールバック: TO: フォーマットがない場合も全文を送る
+        if not delivered and self._human_queue is not None:
+            await self._human_queue.put({"from_agent": self.agent_id, "content": text.strip()})
+
+    def _build_human_command_messages(self, request: str) -> list:
+        """人間からの指示用 LLM メッセージリストを組み立てる。"""
+        system_prompt = build_device_prompt(
+            device_name=self.device_name,
+            device_type=self._device_type,
+            management_ip=self._management_ip,
+            neighbors=self._memory.neighbor_map,
+            desired_state=self._memory.desired_state,
+        )
+        context = self._memory.recent_status_summary(n=5)
+        user_content = (
+            f"## 人間オペレーターからの指示\n{request}\n\n"
+            f"## 直近のステータス履歴\n{context}\n\n"
+            "show コマンドで必要な情報を収集し、"
+            "結果を **TO: HUMAN | MSG: ...** 形式で回答してください。\n"
+            "ログへの記録は **TO: LOG | MSG: ...** を使ってください。"
+        )
+        return [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_content),
+        ]
+
+    async def _process_poll_or_syslog(self, event: AgentEvent) -> None:
+        """PollEvent / SyslogEvent を LLM に渡して推論し、ツール呼び出しループ後に結果をルーティングする。"""
         summary = _event_summary(event)
         self._memory.add_status(_event_source(event), summary)
         logger.info("[%s] 調査開始: %s", self.agent_id, summary[:80])
@@ -281,6 +463,7 @@ class DeviceAgent:
             device_type=self._device_type,
             management_ip=self._management_ip,
             neighbors=self._memory.neighbor_map,
+            desired_state=self._memory.desired_state,
         )
         event_text = _event_summary(event)
         context = self._memory.recent_status_summary(n=10)
@@ -391,13 +574,14 @@ class DeviceAgent:
             device_type=self._device_type,
             management_ip=self._management_ip,
             neighbors=self._memory.neighbor_map,
+            desired_state=self._memory.desired_state,
         )
         context = self._memory.recent_status_summary(n=5)
         user_content = (
             f"## 調査依頼\n{request.symptom_summary}\n\n"
             f"## 直近のステータス履歴\n{context}\n\n"
-            "show コマンドで自装置の状態を調査し、"
-            "調査結果を TO: COORDINATOR | MSG: ... 形式で報告してください。"
+            "正常状態の定義（ベースライン）と現在の状態を比較し、"
+            "差異を優先的に調査して TO: COORDINATOR | MSG: ... 形式で報告してください。"
         )
         return [
             SystemMessage(content=system_prompt),
@@ -415,6 +599,12 @@ def _event_summary(event: AgentEvent) -> str:
         return f"[SYSLOG/{event.severity}] {event.raw_text}"
     if isinstance(event, PollEvent):
         return f"[POLL/{event.source}] {event.content[:200]}"
+    if isinstance(event, ConnectivityLostEvent):
+        return f"[CONNECTIVITY/LOST] {event.host}:{event.port}"
+    if isinstance(event, ConnectivityRestoredEvent):
+        return f"[CONNECTIVITY/RESTORED] {event.host}:{event.port}"
+    if isinstance(event, HumanCommandEvent):
+        return f"[HUMAN] {event.request[:200]}"
     return str(event)
 
 
@@ -422,4 +612,8 @@ def _event_source(event: AgentEvent) -> str:
     """メモリに記録する source タグを返す。"""
     if isinstance(event, SyslogEvent):
         return "syslog"
+    if isinstance(event, (ConnectivityLostEvent, ConnectivityRestoredEvent)):
+        return "connectivity"
+    if isinstance(event, HumanCommandEvent):
+        return "human"
     return "poll"

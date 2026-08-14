@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agentic_ni.distributed.memory import NeighborInfo
+    from agentic_ni.distributed.memory import DesiredState, NeighborInfo
 
 # distributed/prompts.py → agentic_ni → src → <project root> → prompts/
 _BASE_PROMPT_PATH = Path(__file__).parents[3] / "prompts" / "device_agent_system.md"
@@ -21,6 +21,7 @@ def build_device_prompt(
     device_type: str,
     management_ip: str,
     neighbors: "dict[str, NeighborInfo] | None" = None,
+    desired_state: "DesiredState | None" = None,
 ) -> str:
     """装置固有の情報をシステムプロンプトに埋め込んで返す。
 
@@ -29,6 +30,7 @@ def build_device_prompt(
         device_type:    装置タイプ（例: "router", "switch"）。
         management_ip:  管理 IP アドレス。
         neighbors:      隣接装置マップ（agent_id → NeighborInfo）。
+        desired_state:  この装置の正常（期待）状態。
 
     Returns:
         str: 装置固有情報が埋め込まれたシステムプロンプト。
@@ -43,6 +45,7 @@ def build_device_prompt(
     template = _BASE_PROMPT_PATH.read_text(encoding="utf-8")
 
     neighbor_text = _build_neighbor_text(neighbors or {})
+    desired_state_text = desired_state.to_text() if desired_state else "（期待状態の定義なし）"
 
     # str.replace を使用（Markdown 内の {} と競合しないため format() は使わない）
     return (
@@ -51,6 +54,7 @@ def build_device_prompt(
         .replace("{device_type}", device_type)
         .replace("{management_ip}", management_ip or "未設定")
         .replace("{neighbors}", neighbor_text)
+        .replace("{desired_state}", desired_state_text)
     )
 
 
