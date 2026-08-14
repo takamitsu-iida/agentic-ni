@@ -52,6 +52,12 @@ _NODE_DEFINITION_MAP: dict[str, str] = {
     "unmanaged_switch": "switch",
 }
 
+# これらの node_definition はエージェント起動対象外（自ホスト・ブリッジ等）
+_NO_AGENT_NODE_DEFINITIONS: frozenset[str] = frozenset({
+    "ubuntu",
+    "external_connector",
+})
+
 
 # ---------------------------------------------------------------------------
 # トポロジーパーサー
@@ -194,6 +200,13 @@ class AgentOrchestrator:
         )
 
         for node_info in node_infos:
+            if node_info.node_definition.lower() in _NO_AGENT_NODE_DEFINITIONS:
+                logger.debug(
+                    "  スキップ: %s (%s) — エージェント不要ノード",
+                    node_info.label,
+                    node_info.node_definition,
+                )
+                continue
             await self._start_agent(node_info, neighbor_map.get(node_info.id, []))
 
         logger.info("%d 台のエージェントを起動しました。", len(self._agents))

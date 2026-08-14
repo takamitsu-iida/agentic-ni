@@ -80,7 +80,7 @@ devices:
     connections:
       cli:
         protocol: ssh
-        ip: 192.168.100.2   # Ubuntu と直結 (192.168.100.0/30) — BGP 不要で到達可能
+        ip: 10.0.0.11       # Loopback0 — Ubuntu から BGP ファブリック経由で到達
         port: 22
 
   Leaf2:

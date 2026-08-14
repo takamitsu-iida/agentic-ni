@@ -136,6 +136,9 @@ nodes:
         label: "GigabitEthernet0/2"
         slot: 2
         type: physical
+      - id: "loopback0"
+        label: "Loopback0"
+        type: loopback
 
   - id: "n1"
     label: "Spine2"
@@ -215,6 +218,9 @@ nodes:
         label: "GigabitEthernet0/2"
         slot: 2
         type: physical
+      - id: "loopback0"
+        label: "Loopback0"
+        type: loopback
 
   # ── Leaf 層 ──────────────────────────────────────────────────
 
@@ -295,6 +301,9 @@ nodes:
         label: "GigabitEthernet0/2"
         slot: 2
         type: physical
+      - id: "loopback0"
+        label: "Loopback0"
+        type: loopback
 
   - id: "n3"
     label: "Leaf2"
@@ -362,6 +371,9 @@ nodes:
         label: "GigabitEthernet0/1"
         slot: 1
         type: physical
+      - id: "loopback0"
+        label: "Loopback0"
+        type: loopback
 
   - id: "n4"
     label: "Leaf3"
@@ -429,6 +441,9 @@ nodes:
         label: "GigabitEthernet0/1"
         slot: 1
         type: physical
+      - id: "loopback0"
+        label: "Loopback0"
+        type: loopback
 
   # ── Ubuntu エージェントノード ─────────────────────────────────
   # ens2: Leaf1 との管理セグメント (192.168.100.1/30)
