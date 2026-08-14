@@ -116,7 +116,12 @@ nodes:
        exit-address-family
       !
       crypto key generate rsa modulus 2048
+      ip ssh source-interface Loopback0
       ip ssh version 2
+      !
+      no banner exec
+      no banner incoming
+      no banner login
       !
       line vty 0 4
        login local
@@ -198,7 +203,12 @@ nodes:
        exit-address-family
       !
       crypto key generate rsa modulus 2048
+      ip ssh source-interface Loopback0
       ip ssh version 2
+      !
+      no banner exec
+      no banner incoming
+      no banner login
       !
       line vty 0 4
        login local
@@ -281,7 +291,12 @@ nodes:
       ip route 0.0.0.0 0.0.0.0 192.168.100.1
       !
       crypto key generate rsa modulus 2048
+      ip ssh source-interface Loopback0
       ip ssh version 2
+      !
+      no banner exec
+      no banner incoming
+      no banner login
       !
       line vty 0 4
        login local
@@ -355,7 +370,12 @@ nodes:
        exit-address-family
       !
       crypto key generate rsa modulus 2048
+      ip ssh source-interface Loopback0
       ip ssh version 2
+      !
+      no banner exec
+      no banner incoming
+      no banner login
       !
       line vty 0 4
        login local
@@ -425,7 +445,12 @@ nodes:
        exit-address-family
       !
       crypto key generate rsa modulus 2048
+      ip ssh source-interface Loopback0
       ip ssh version 2
+      !
+      no banner exec
+      no banner incoming
+      no banner login
       !
       line vty 0 4
        login local
