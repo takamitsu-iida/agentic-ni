@@ -179,6 +179,8 @@ def _print_status(orchestrator: AgentOrchestrator, syslog_source: str) -> None:
         print(f"  {_c(_CYAN, '  <装置名>: <指示>')}          例: R1: 現在のOSPFネイバー状態を確認して")
         print(f"  {_c(_CYAN, '  <装置名>,<装置名>,...: <指示>')}  例: R1,R2: show ip route を確認して")
         print(f"  {_c(_CYAN, '  ALL: <指示>')}               例: ALL: BGP セッションを全台確認して")
+        print(f"  {_c(_CYAN, '  BASELINE')}                  全装置のDesiredState（正常状態スナップショット）を取得")
+        print(f"  {_c(_CYAN, '  BASELINE: <装置名,...>')}    指定装置のみベースラインを取得  例: BASELINE: R1,R2")
     print()
 
 
@@ -195,9 +197,13 @@ async def _check_and_print_connectivity(orchestrator: AgentOrchestrator) -> None
     print()
 
 
-async def _capture_and_print_baselines(orchestrator: AgentOrchestrator) -> None:
-    """全装置から DesiredState を自動取得して結果を表示する。"""
-    print(f"{_c(_BOLD, '  ── DesiredState 自動取得（正常状態スナップショット）──')}")
+async def _capture_and_print_baselines(
+    orchestrator: AgentOrchestrator,
+    filter_ids: list[str] | None = None,
+) -> None:
+    """指定装置（省略時は全装置）の DesiredState を取得して結果を表示する。"""
+    label = ", ".join(filter_ids) if filter_ids else "全装置"
+    print(f"{_c(_BOLD, f'  ── DesiredState 取得（{label}）──')}")
     print(_c(_DIM, "  show ip interface brief / ospf neighbor / bgp summary を実行中..."))
     results = await orchestrator.capture_all_baselines(timeout=60.0)
     if not results:
@@ -205,6 +211,8 @@ async def _capture_and_print_baselines(orchestrator: AgentOrchestrator) -> None:
         print()
         return
     for agent_id, status in sorted(results.items()):
+        if filter_ids and agent_id not in filter_ids:
+            continue
         if status.startswith("ok"):
             mark = _c(_GREEN, "✓")
             detail = _c(_DIM, status[3:])  # "(IF:3 NB:2)" 部分
@@ -216,6 +224,34 @@ async def _capture_and_print_baselines(orchestrator: AgentOrchestrator) -> None:
         else:
             print(f"  {_c(_RED, '✗')}  {_c(_CYAN, agent_id)}: {_c(_RED, status)}")
     print()
+
+
+async def _handle_baseline_command(
+    orchestrator: AgentOrchestrator,
+    device_spec: str | None,
+) -> None:
+    """BASELINE コマンドを処理する。device_spec が None または空なら全台対象。"""
+    filter_ids: list[str] | None = None
+    if device_spec:
+        # エージェントキーは "Agent-R1" 形式なので名前部分だけ抽出して正規化
+        all_agents = orchestrator.get_all_agents()
+        # agent_id は "Agent-R1" または "R1" の可能性があるため両方対応
+        all_names = {
+            aid.removeprefix("Agent-"): aid
+            for aid in all_agents
+        }
+        requested = [s.strip() for s in device_spec.split(",") if s.strip()]
+        filter_ids = []
+        for name in requested:
+            if name in all_names:
+                filter_ids.append(all_names[name])
+            elif name in all_agents:
+                filter_ids.append(name)
+            else:
+                print(f"  {_c(_RED, '[!]')} 装置が見つかりません: {_c(_BOLD, name)}")
+        if not filter_ids:
+            return
+    await _capture_and_print_baselines(orchestrator, filter_ids or None)
 
 
 # ---------------------------------------------------------------------------
@@ -420,8 +456,6 @@ async def _async_main(args: Any) -> None:
         await syslog_source.start()
         _print_status(orchestrator, syslog_source_str)
         await _check_and_print_connectivity(orchestrator)
-        if not args.mock_tools:
-            await _capture_and_print_baselines(orchestrator)
 
         tasks: list[asyncio.Task] = [
             asyncio.create_task(
@@ -437,6 +471,7 @@ async def _async_main(args: Any) -> None:
             ))
             print(f"{_c(_BOLD + _GREEN, '  ✓ 準備完了 — 人間からの指示を受け付けています')}")
             print(f"  {_c(_DIM, '入力形式: <装置名>: <指示・質問>　例) R1: OSPFネイバーを確認してください')}")
+            print(f"  {_c(_DIM, 'DesiredState取得: BASELINE または BASELINE: R1,R2')}")
             print()
         await shutdown_event.wait()
         for t in tasks:
@@ -511,6 +546,12 @@ async def _run_human_input_loop(
         target_part, _, request = line.partition(":")
         target_part = target_part.strip()
         request = request.strip()
+
+        # BASELINE [: <装置名,...>] → DesiredState 取得
+        if target_part.upper() == "BASELINE":
+            await _handle_baseline_command(orchestrator, request or None)
+            continue
+
         if not request:
             continue
 
