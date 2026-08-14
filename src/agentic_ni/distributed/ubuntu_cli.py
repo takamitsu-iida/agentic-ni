@@ -166,6 +166,29 @@ async def _check_and_print_connectivity(orchestrator: AgentOrchestrator) -> None
     print()
 
 
+async def _capture_and_print_baselines(orchestrator: AgentOrchestrator) -> None:
+    """全装置から DesiredState を自動取得して結果を表示する。"""
+    print(f"{_c(_BOLD, '  ── DesiredState 自動取得（正常状態スナップショット）──')}")
+    print(_c(_DIM, "  show ip interface brief / ospf neighbor / bgp summary を実行中..."))
+    results = await orchestrator.capture_all_baselines(timeout=15.0)
+    if not results:
+        print(_c(_DIM, "  （ツール設定なし、スキップ）"))
+        print()
+        return
+    for agent_id, status in sorted(results.items()):
+        if status.startswith("ok"):
+            mark = _c(_GREEN, "✓")
+            detail = _c(_DIM, status[3:])  # "(IF:3 NB:2)" 部分
+            print(f"  {mark}  {_c(_CYAN, agent_id)}: ベースライン取得完了 {detail}")
+        elif status == "skipped":
+            print(f"  {_c(_DIM, '─')}  {_c(_CYAN, agent_id)}: {_c(_DIM, 'スキップ（モック）')}")
+        elif status == "timeout":
+            print(f"  {_c(_RED, '✗')}  {_c(_CYAN, agent_id)}: {_c(_YELLOW, 'タイムアウト（ベースラインなし）')}")
+        else:
+            print(f"  {_c(_RED, '✗')}  {_c(_CYAN, agent_id)}: {_c(_RED, status)}")
+    print()
+
+
 # ---------------------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------------------
@@ -349,6 +372,8 @@ async def _async_main(args: Any) -> None:
         await syslog_source.start()
         _print_status(orchestrator, syslog_source_str)
         await _check_and_print_connectivity(orchestrator)
+        if not args.mock_tools:
+            await _capture_and_print_baselines(orchestrator)
 
         tasks: list[asyncio.Task] = [
             asyncio.create_task(

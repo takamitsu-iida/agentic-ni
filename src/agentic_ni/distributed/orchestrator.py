@@ -349,6 +349,49 @@ class AgentOrchestrator:
     def agent_count(self) -> int:
         return len(self._agents)
 
+    async def capture_all_baselines(self, timeout: float = 15.0) -> dict[str, str]:
+        """全エージェントの DesiredState を show コマンドから自動生成する。
+
+        Args:
+            timeout: 1 台あたりのタイムアウト秒数。
+
+        Returns:
+            dict[str, str]: agent_id → "ok" / "skipped" / "timeout" / "error: ..."
+        """
+        from agentic_ni.distributed.device_tools import capture_desired_state
+
+        async def _capture_one(agent_id: str) -> tuple[str, str]:
+            toolkit = self._toolkits.get(agent_id)
+            if toolkit is None or not hasattr(toolkit, "run_show_direct"):
+                return agent_id, "skipped"
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                return agent_id, "skipped"
+            try:
+                desired = await asyncio.wait_for(
+                    asyncio.to_thread(capture_desired_state, toolkit.run_show_direct),
+                    timeout=timeout,
+                )
+                agent._memory.desired_state = desired
+                n_intf = len(desired.interfaces)
+                n_nb = len(desired.routing_neighbors)
+                return agent_id, f"ok (IF:{n_intf} NB:{n_nb})"
+            except asyncio.TimeoutError:
+                return agent_id, "timeout"
+            except Exception as exc:
+                return agent_id, f"error: {exc}"
+
+        results = await asyncio.gather(
+            *[_capture_one(aid) for aid in list(self._toolkits)],
+            return_exceptions=True,
+        )
+        return {
+            agent_id: status
+            for r in results
+            if not isinstance(r, Exception)
+            for agent_id, status in [r]
+        }
+
     # ------------------------------------------------------------------
     # SYSLOG 受信（SyslogServer / ubuntu_cli からの呼び出し）
     # ------------------------------------------------------------------

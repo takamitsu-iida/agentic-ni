@@ -26,7 +26,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+import re
+from typing import Any, Callable
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -602,3 +603,84 @@ def _assert_testbed(testbed_yaml: str | None, device_name: str) -> None:
             f"[{device_name}] testbed_yaml が設定されていません。"
             "DeviceToolkit の初期化時に testbed_yaml を指定してください。"
         )
+
+
+# ---------------------------------------------------------------------------
+# DesiredState 自動生成
+# ---------------------------------------------------------------------------
+
+# show ip interface brief の各行を解析する正規表現
+# 例: "GigabitEthernet0/0  10.0.12.1  YES NVRAM  up  up"
+_IFACE_BRIEF_RE = re.compile(
+    r"^(\S+)\s+\S+\s+\S+\s+\S+\s+(administratively\s+down|up|down)\s+(up|down)",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# show ip ospf neighbor の各行を解析する正規表現（Dead Time を anchor として使う）
+# 例: "2.2.2.2  1  FULL/  -  00:00:36  10.0.12.2  GigabitEthernet0/0"
+_OSPF_NEIGHBOR_RE = re.compile(
+    r"^(\d[\d.]+)\s+\d+\s+\S.*?\s+\d{2}:\d{2}:\d{2}\s+(\d[\d.]+)\s+(\S+)",
+    re.MULTILINE,
+)
+
+# show ip bgp summary の確立済みネイバー行を解析する正規表現
+# 末尾が数値（受信プレフィックス数）なら Established
+# 例: "2.2.2.2  4  65000  8  8  5  0  0  00:05:21  0"
+_BGP_ESTABLISHED_RE = re.compile(
+    r"^(\d[\d.]+)\s+\d+\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\S+\s+(\d+)\s*$",
+    re.MULTILINE,
+)
+
+
+def capture_desired_state(run_show_fn: Callable[[str], str]) -> "DesiredState":
+    """show コマンドの結果から DesiredState を自動生成する。
+
+    Args:
+        run_show_fn: コマンド文字列を受け取り出力文字列を返す同期 callable。
+                     DeviceToolkit.run_show_direct がそのまま使える。
+
+    Returns:
+        DesiredState: 現在の稼働状態をベースラインとして構築した期待状態。
+    """
+    from agentic_ni.distributed.memory import DesiredState
+
+    interfaces: dict[str, str] = {}
+    routing_neighbors: list[str] = []
+
+    # ── インターフェース状態 ──────────────────────────────────────────
+    try:
+        output = run_show_fn("show ip interface brief")
+        for m in _IFACE_BRIEF_RE.finditer(output):
+            intf = m.group(1)
+            line_status = m.group(2).lower()
+            proto_status = m.group(3).lower()
+            if "administratively" in line_status:
+                continue  # shutdown 状態は期待状態に含めない
+            if proto_status == "up":
+                interfaces[intf] = "up"
+    except Exception:
+        pass
+
+    # ── OSPF ネイバー ─────────────────────────────────────────────────
+    try:
+        output = run_show_fn("show ip ospf neighbor")
+        for m in _OSPF_NEIGHBOR_RE.finditer(output):
+            neighbor_id, addr, intf = m.group(1), m.group(2), m.group(3)
+            routing_neighbors.append(f"OSPF {neighbor_id} via {intf} (addr: {addr})")
+    except Exception:
+        pass
+
+    # ── BGP ネイバー（Established のみ）──────────────────────────────
+    try:
+        output = run_show_fn("show ip bgp summary")
+        for m in _BGP_ESTABLISHED_RE.finditer(output):
+            neighbor, asn = m.group(1), m.group(2)
+            routing_neighbors.append(f"BGP neighbor {neighbor} AS{asn}")
+    except Exception:
+        pass
+
+    return DesiredState(
+        interfaces=interfaces,
+        routing_neighbors=routing_neighbors,
+        notes="起動時スナップショットから自動生成",
+    )
