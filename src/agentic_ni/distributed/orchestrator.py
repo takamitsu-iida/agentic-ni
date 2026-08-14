@@ -349,11 +349,14 @@ class AgentOrchestrator:
     def agent_count(self) -> int:
         return len(self._agents)
 
-    async def capture_all_baselines(self, timeout: float = 15.0) -> dict[str, str]:
+    async def capture_all_baselines(
+        self, timeout: float = 15.0, interval: float = 1.0
+    ) -> dict[str, str]:
         """全エージェントの DesiredState を show コマンドから自動生成する。
 
         Args:
             timeout: 1 台あたりのタイムアウト秒数。
+            interval: 装置間の待機秒数（一斉送信によるトラフィック集中を防ぐ）。
 
         Returns:
             dict[str, str]: agent_id → "ok" / "skipped" / "timeout" / "error: ..."
@@ -381,16 +384,14 @@ class AgentOrchestrator:
             except Exception as exc:
                 return agent_id, f"error: {exc}"
 
-        results = await asyncio.gather(
-            *[_capture_one(aid) for aid in list(self._toolkits)],
-            return_exceptions=True,
-        )
-        return {
-            agent_id: status
-            for r in results
-            if not isinstance(r, Exception)
-            for agent_id, status in [r]
-        }
+        results: list[tuple[str, str]] = []
+        agent_ids = list(self._toolkits)
+        for i, aid in enumerate(agent_ids):
+            r = await _capture_one(aid)
+            results.append(r)
+            if interval > 0 and i < len(agent_ids) - 1:
+                await asyncio.sleep(interval)
+        return {agent_id: status for agent_id, status in results}
 
     # ------------------------------------------------------------------
     # SYSLOG 受信（SyslogServer / ubuntu_cli からの呼び出し）
