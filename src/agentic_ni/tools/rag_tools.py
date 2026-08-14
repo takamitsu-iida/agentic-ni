@@ -238,6 +238,34 @@ def search_knowledge(query: str, k: int = 3) -> list[dict]:
     return knowledge
 
 
+def get_knowledge_stats() -> dict:
+    """知識ベースの統計情報を返す。
+
+    Returns:
+        dict: {
+            "available": bool,       # chromadb が使用可能かどうか
+            "total_chunks": int,     # 索引済みチャンク総数
+            "source_files": list[str],  # 索引済みファイル名一覧（重複なし）
+        }
+    """
+    try:
+        collection = _get_knowledge_collection()
+        total = collection.count()
+        if total == 0:
+            return {"available": True, "total_chunks": 0, "source_files": []}
+        result = collection.get(include=["metadatas"])
+        files: list[str] = sorted({
+            m.get("source_file", "")
+            for m in (result.get("metadatas") or [])
+            if m.get("source_file")
+        })
+        return {"available": True, "total_chunks": total, "source_files": files}
+    except ImportError:
+        return {"available": False, "total_chunks": 0, "source_files": []}
+    except Exception:  # noqa: BLE001
+        return {"available": True, "total_chunks": 0, "source_files": []}
+
+
 def clear_knowledge_base() -> None:
     """知識ベースのインデックスを全消去する。
 

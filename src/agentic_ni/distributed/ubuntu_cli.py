@@ -108,6 +108,28 @@ def _make_human_handler(shutdown_event: asyncio.Event):
 # ステータス表示
 # ---------------------------------------------------------------------------
 
+def _print_rag_status() -> None:
+    """RAG 知識ベースの統計を表示する。"""
+    try:
+        from agentic_ni.tools import rag_tools
+        stats = rag_tools.get_knowledge_stats()
+    except Exception:  # noqa: BLE001
+        stats = {"available": False, "total_chunks": 0, "source_files": []}
+
+    if not stats["available"]:
+        print(f"  RAG               : {_c(_DIM, '無効 (chromadb 未インストール  uv sync --extra rag)')}")
+        return
+
+    chunks: int = stats["total_chunks"]
+    files: list[str] = stats["source_files"]
+    if chunks == 0:
+        print(f"  RAG               : {_c(_YELLOW, '索引なし')}  "
+              f"{_c(_DIM, '(agentic-ni --rag-index で構築)')}")
+    else:
+        print(f"  RAG               : {_c(_GREEN, f'{chunks} チャンク')}  "
+              f"({len(files)} ファイル: {', '.join(files)})")
+
+
 def _print_status(orchestrator: AgentOrchestrator, syslog_source: str) -> None:
     print(f"\n{_c(_BOLD, '=' * 60)}")
     print(_c(_BOLD + _GREEN, "  agentic-ni-ubuntu: エージェント起動完了"))
@@ -119,6 +141,7 @@ def _print_status(orchestrator: AgentOrchestrator, syslog_source: str) -> None:
         print(f"  {_c(_CYAN, agent_id)} ({agent._device_type})")
         if neighbors:
             print(f"    隣接: {neighbors}")
+    _print_rag_status()
     print(_c(_BOLD, "=" * 60))
     print(_c(_DIM, "\n  ネットワーク装置から SYSLOG を受信すると自動的に調査を開始します。"))
     print(_c(_DIM, "  終了するには Ctrl+C を押してください。"))
@@ -168,7 +191,12 @@ def main() -> None:
             "  <装置名>: <指示・質問>\n"
             "  例: R1: 現在のOSPFネイバー状態を確認してください\n"
             "  例: R2: show ip bgp summary の結果を教えて\n"
-            "  例: R1: GigabitEthernet0/1 がダウンしている原因を調べて\n"
+            "  例: R1: GigabitEthernet0/1 がダウンしている原因を調べて\n\n"
+            "RAG 知識ベース:\n"
+            "  rag/ ディレクトリのファイルを索引化すると、エージェントが障害診断時に\n"
+            "  プロトコルガイドやトラブルシューティング知見を参照して精度が上がります。\n"
+            "  索引構築: agentic-ni --rag-index\n"
+            "  確認方法: 起動時のステータス表示で RAG 統計が表示されます。\n"
         ),
     )
     parser.add_argument(
