@@ -267,10 +267,11 @@ class AgentOrchestrator:
         management_ip = ""
         if self._toolkit_factory is not None:
             toolkit = self._toolkit_factory(node_info.label)
-            tools = toolkit.get_tools()
-            self._toolkits[node_info.agent_id] = toolkit
-            if hasattr(toolkit, "_get_management_ip"):
-                management_ip, _ = toolkit._get_management_ip()
+            if toolkit is not None:
+                tools = toolkit.get_tools()
+                self._toolkits[node_info.agent_id] = toolkit
+                if hasattr(toolkit, "_get_management_ip"):
+                    management_ip, _ = toolkit._get_management_ip()
 
         agent = DeviceAgent(
             device_name=node_info.label,

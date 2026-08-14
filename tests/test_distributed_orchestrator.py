@@ -249,6 +249,32 @@ class TestAgentOrchestrator:
         await orch.stop_all()
         await bus.close()
 
+    async def test_toolkit_factory_returning_none_does_not_crash(self, tmp_path: Path):
+        """toolkit_factory が None を返してもエージェント起動がクラッシュしないこと。"""
+        import yaml
+        topo_file = tmp_path / "topology.yaml"
+        topo_file.write_text(yaml.dump(_P2P_TOPOLOGY))
+
+        def factory(device_name: str):
+            return None  # testbed 未指定時などを想定
+
+        bus = InMemoryBus()
+        await bus.connect()
+        orch = AgentOrchestrator(bus=bus, toolkit_factory=factory)
+        await orch.start_from_topology(topo_file)
+
+        # エージェントは起動する（ツールなし）
+        assert orch.agent_count() == 2
+        # ツールキット未登録なので _toolkits は空
+        assert len(orch._toolkits) == 0
+
+        # capture_all_baselines はスキップ扱いで空の結果を返す
+        results = await orch.capture_all_baselines()
+        assert results == {}
+
+        await orch.stop_all()
+        await bus.close()
+
     async def test_missing_topology_raises(self):
         bus = InMemoryBus()
         await bus.connect()

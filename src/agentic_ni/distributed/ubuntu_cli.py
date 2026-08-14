@@ -387,6 +387,9 @@ async def _async_main(args: Any) -> None:
             tasks.append(asyncio.create_task(
                 _run_human_input_loop(orchestrator, shutdown_event), name="human-input"
             ))
+            print(f"{_c(_BOLD + _GREEN, '  ✓ 準備完了 — 人間からの指示を受け付けています')}")
+            print(f"  {_c(_DIM, '入力形式: <装置名>: <指示・質問>　例) R1: OSPFネイバーを確認してください')}")
+            print()
         await shutdown_event.wait()
         for t in tasks:
             t.cancel()
