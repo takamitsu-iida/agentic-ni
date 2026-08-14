@@ -95,7 +95,7 @@ def _connect_device(testbed: Any, device_name: str) -> Any:
     if device_name not in testbed.devices:
         raise KeyError(f"デバイスがテストベッドに見つかりません: {device_name!r}")
     device = testbed.devices[device_name]
-    device.connect(log_stdout=False)
+    device.connect(log_stdout=False, connection_timeout=30, learn_hostname=False)
     return device
 
 

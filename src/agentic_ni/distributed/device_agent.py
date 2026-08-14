@@ -174,6 +174,7 @@ class DeviceAgent:
         self._llm: BaseChatModel | None = llm
 
         self._event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        self._reachable: bool = True  # management_ip 未設定時は常に到達可能とみなす
         self._running = False
         self._task: asyncio.Task | None = None
         # デモ・可視化用フック（None の場合は無効）
@@ -277,6 +278,17 @@ class DeviceAgent:
         if isinstance(event, ConnectivityRestoredEvent):
             await self._handle_connectivity_restored(event)
             return
+        if not self._reachable:
+            if isinstance(event, HumanCommandEvent):
+                logger.info("[%s] 到達不可のため人間コマンドをスキップ", self.agent_id)
+                if self._human_queue is not None:
+                    await self._human_queue.put({
+                        "from_agent": self.agent_id,
+                        "content": f"[{self.device_name}] 担当装置に現在到達できないため調査できません。",
+                    })
+            else:
+                logger.debug("[%s] 到達不可のためイベントをスキップ", self.agent_id)
+            return
         if isinstance(event, HumanCommandEvent):
             await self._handle_human_command(event)
             return
@@ -284,6 +296,7 @@ class DeviceAgent:
 
     async def _handle_connectivity_lost(self, event: ConnectivityLostEvent) -> None:
         """通信断を記録し、LLM を介さず直接人間に報告する。"""
+        self._reachable = False
         msg = (
             f"[{self.device_name}] 担当ノードとの通信が途絶えました。"
             f" 管理 IP: {event.host}:{event.port}"
@@ -295,6 +308,7 @@ class DeviceAgent:
 
     async def _handle_connectivity_restored(self, event: ConnectivityRestoredEvent) -> None:
         """通信復旧を記録し、LLM を介さず直接人間に報告する。"""
+        self._reachable = True
         msg = (
             f"[{self.device_name}] 担当ノードとの通信が復旧しました。"
             f" 管理 IP: {event.host}:{event.port}"
@@ -439,7 +453,10 @@ class DeviceAgent:
                 try:
                     logger.info("[%s] ツール実行中: %s %s", self.agent_id, tool_name, str(tool_args)[:80])
                     # sync ツールをスレッドプールで実行してイベントループをブロックしない
-                    result = await asyncio.to_thread(t.invoke, tool_args)
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(t.invoke, tool_args),
+                        timeout=60.0,
+                    )
                     logger.info("[%s] ツール完了: %s", self.agent_id, tool_name)
                     result_str = str(result)
                     self._memory.add_status("tool", f"{tool_name}: {result_str[:200]}")

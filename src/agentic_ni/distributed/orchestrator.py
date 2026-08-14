@@ -164,6 +164,7 @@ class AgentOrchestrator:
         self._readonly = readonly
         self._log_poll_interval = log_poll_interval
         self._agents: dict[str, DeviceAgent] = {}  # agent_id → DeviceAgent
+        self._toolkits: dict[str, Any] = {}  # agent_id → toolkit（接続確認用）
         self.human_queue: asyncio.Queue = asyncio.Queue()
         # Correlator / Coordinator は start_from_topology() で初期化する
         self._correlator: EventCorrelator | None = None
@@ -219,9 +220,13 @@ class AgentOrchestrator:
 
         toolkit = None
         tools = []
+        management_ip = ""
         if self._toolkit_factory is not None:
             toolkit = self._toolkit_factory(node_info.label)
             tools = toolkit.get_tools()
+            self._toolkits[node_info.agent_id] = toolkit
+            if hasattr(toolkit, "_get_management_ip"):
+                management_ip, _ = toolkit._get_management_ip()
 
         agent = DeviceAgent(
             device_name=node_info.label,
@@ -229,6 +234,7 @@ class AgentOrchestrator:
             bus=self._bus,
             memory=memory,
             device_type=node_info.device_type,
+            management_ip=management_ip,
             llm=self._llm,
             tools=tools,
             human_queue=self.human_queue,
@@ -256,6 +262,29 @@ class AgentOrchestrator:
             await agent.stop()
         self._agents.clear()
         logger.info("全エージェントを停止しました。")
+
+    async def check_all_connectivity(self, timeout: float = 5.0) -> dict[str, tuple[bool, str]]:
+        """全エージェントの担当装置への TCP 到達性を並行チェックする。"""
+        if not self._toolkits:
+            return {}
+
+        async def _check_one(agent_id: str, toolkit: Any) -> tuple[str, bool, str]:
+            try:
+                ok, msg = await toolkit.check_connectivity(timeout=timeout)
+            except Exception as exc:
+                ok, msg = False, f"チェックエラー: {exc}"
+            return agent_id, ok, msg
+
+        results = await asyncio.gather(
+            *[_check_one(aid, tk) for aid, tk in self._toolkits.items()],
+            return_exceptions=True,
+        )
+        return {
+            agent_id: (ok, msg)
+            for r in results
+            if not isinstance(r, Exception)
+            for agent_id, ok, msg in [r]
+        }
 
     # ------------------------------------------------------------------
     # エージェント参照

@@ -90,6 +90,39 @@ class DeviceToolkit:
             tools.append(self._make_apply_config())
         return tools
 
+    async def check_connectivity(self, timeout: float = 5.0) -> tuple[bool, str]:
+        """testbed.yaml の接続先 IP に TCP 接続を試みて到達性を確認する。"""
+        ip, port = self._get_management_ip()
+        if not ip:
+            return False, "管理 IP が不明"
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, port),
+                timeout=timeout,
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True, f"{ip}:{port} 到達可能"
+        except Exception as exc:
+            return False, f"{ip}:{port} 到達不可 ({type(exc).__name__})"
+
+    def _get_management_ip(self) -> tuple[str, int]:
+        """testbed.yaml から最初の接続先 IP とポートを返す。"""
+        if not self._testbed_yaml:
+            return "", 22
+        import yaml as _yaml
+        data = _yaml.safe_load(self._testbed_yaml)
+        device_data = data.get("devices", {}).get(self._device_name, {})
+        for conn in device_data.get("connections", {}).values():
+            ip = conn.get("ip", "")
+            port = conn.get("port", 22)
+            if ip:
+                return str(ip), int(port)
+        return "", 22
+
     # ------------------------------------------------------------------
     # Read-Only ツール生成
     # ------------------------------------------------------------------
@@ -246,6 +279,9 @@ class MockDeviceToolkit:
         if not self._readonly:
             tools.append(self._make_apply_config())
         return tools
+
+    async def check_connectivity(self, timeout: float = 5.0) -> tuple[bool, str]:
+        return True, "モック（チェックなし）"
 
     def _make_run_show(self) -> StructuredTool:
         device_name = self._device_name

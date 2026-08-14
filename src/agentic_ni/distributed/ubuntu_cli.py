@@ -130,6 +130,19 @@ def _print_status(orchestrator: AgentOrchestrator, syslog_source: str) -> None:
     print()
 
 
+async def _check_and_print_connectivity(orchestrator: AgentOrchestrator) -> None:
+    """全装置への TCP 到達性を確認して結果を表示する。"""
+    results = await orchestrator.check_all_connectivity(timeout=5.0)
+    if not results:
+        return
+    print(f"{_c(_BOLD, '  ── 起動時接続確認 (TCP port 22) ──')}")
+    for agent_id, (ok, msg) in sorted(results.items()):
+        mark = _c(_GREEN, "✓") if ok else _c(_RED, "✗")
+        color = _GREEN if ok else _RED
+        print(f"  {mark}  {_c(_CYAN, agent_id)}: {_c(color, msg)}")
+    print()
+
+
 # ---------------------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------------------
@@ -283,12 +296,13 @@ async def _async_main(args: Any) -> None:
     )
 
     shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
-    def _handle_sigint(signum, frame):
+    def _on_sigint() -> None:
         print(f"\n{_c(_YELLOW, '  Ctrl+C を受信しました。シャットダウンしています...')}")
         shutdown_event.set()
 
-    signal.signal(signal.SIGINT, _handle_sigint)
+    loop.add_signal_handler(signal.SIGINT, _on_sigint)
 
     # SYSLOG ソース（ファイル監視 or UDP 直接受信）
     if args.syslog_file:
@@ -306,20 +320,23 @@ async def _async_main(args: Any) -> None:
         await orchestrator.start_from_topology(args.topology)
         await syslog_source.start()
         _print_status(orchestrator, syslog_source_str)
+        await _check_and_print_connectivity(orchestrator)
 
-        tasks = [asyncio.create_task(
-            orchestrator.run_approval_loop(shutdown_event), name="approval"
-        )]
+        tasks: list[asyncio.Task] = [
+            asyncio.create_task(
+                orchestrator.run_approval_loop(shutdown_event), name="approval"
+            ),
+            asyncio.create_task(
+                _drain_human_responses(orchestrator, shutdown_event), name="human-responses"
+            ),
+        ]
         if sys.stdin.isatty():
             tasks.append(asyncio.create_task(
                 _run_human_input_loop(orchestrator, shutdown_event), name="human-input"
             ))
-        tasks.append(asyncio.create_task(
-            _drain_human_responses(orchestrator, shutdown_event), name="human-responses"
-        ))
-        tasks.append(asyncio.create_task(
-            _wait_for_shutdown(shutdown_event), name="shutdown-wait"
-        ))
+        await shutdown_event.wait()
+        for t in tasks:
+            t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
     finally:
@@ -327,10 +344,6 @@ async def _async_main(args: Any) -> None:
         await orchestrator.stop_all()
         await bus.close()
         print(_c(_GREEN, "  シャットダウン完了。"))
-
-
-async def _wait_for_shutdown(shutdown_event: asyncio.Event) -> None:
-    await shutdown_event.wait()
 
 
 async def _drain_human_responses(
@@ -363,11 +376,20 @@ async def _run_human_input_loop(
     入力フォーマット: ``<装置名>: <指示・質問>``
     例: ``R1: 現在の OSPF ネイバー状態を確認してください``
     """
-    loop = asyncio.get_event_loop()
+    import select as _select
+    loop = asyncio.get_running_loop()
     while not shutdown_event.is_set():
         try:
-            raw = await loop.run_in_executor(None, sys.stdin.readline)
-        except asyncio.CancelledError:
+            ready = await loop.run_in_executor(
+                None, lambda: _select.select([sys.stdin], [], [], 0.5)[0]
+            )
+        except (asyncio.CancelledError, OSError, ValueError):
+            return
+        if not ready:
+            continue
+        try:
+            raw = sys.stdin.readline()
+        except (EOFError, OSError):
             break
         if not raw:
             break  # EOF
