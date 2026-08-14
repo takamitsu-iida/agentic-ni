@@ -123,6 +123,13 @@ class DeviceToolkit:
                 return str(ip), int(port)
         return "", 22
 
+    def run_show_direct(self, command: str) -> str:
+        """show コマンドを直接実行してテキスト出力を返す（LangChain ツールラッパーなし）。"""
+        _assert_testbed(self._testbed_yaml, self._device_name)
+        from agentic_ni.tools.pyats_tools import run_show_command
+        result = run_show_command(self._testbed_yaml, self._device_name, command)
+        return result.get("raw_output", json.dumps(result, ensure_ascii=False))
+
     # ------------------------------------------------------------------
     # Read-Only ツール生成
     # ------------------------------------------------------------------
@@ -282,6 +289,13 @@ class MockDeviceToolkit:
 
     async def check_connectivity(self, timeout: float = 5.0) -> tuple[bool, str]:
         return True, "モック（チェックなし）"
+
+    def run_show_direct(self, command: str) -> str:
+        """モック用 show コマンド直接実行。"""
+        return self._show_responses.get(
+            command,
+            f"[{self._device_name}] (mock) show output for: {command}",
+        )
 
     def _make_run_show(self) -> StructuredTool:
         device_name = self._device_name
@@ -490,6 +504,10 @@ class CMLDeviceToolkit:
             name="get_routing_table",
             description=f"[{self._device_name}] ルーティングテーブル（show ip route）を取得して返す。",
         )
+
+    def run_show_direct(self, command: str) -> str:
+        """CML 経由で show コマンドを直接実行してテキスト出力を返す。"""
+        return self._run(command)
 
     def make_log_poller(
         self,

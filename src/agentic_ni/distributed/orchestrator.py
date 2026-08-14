@@ -163,18 +163,23 @@ class AgentOrchestrator:
         toolkit_factory: Callable[[str], Any] | None = None,
         readonly: bool = True,
         log_poll_interval: float = 0.0,
+        packet_loss_poll_interval: float = 0.0,
+        loss_threshold: float = 0.01,
     ) -> None:
         self._bus = bus
         self._llm = llm
         self._toolkit_factory = toolkit_factory
         self._readonly = readonly
         self._log_poll_interval = log_poll_interval
+        self._packet_loss_poll_interval = packet_loss_poll_interval
+        self._loss_threshold = loss_threshold
         self._agents: dict[str, DeviceAgent] = {}  # agent_id → DeviceAgent
         self._toolkits: dict[str, Any] = {}  # agent_id → toolkit（接続確認用）
         self.human_queue: asyncio.Queue = asyncio.Queue()
-        # Correlator / Coordinator は start_from_topology() で初期化する
+        # Correlator / Coordinator / PacketLossDetector は start_from_topology() で初期化する
         self._correlator: EventCorrelator | None = None
         self._coordinator: IncidentCoordinator | None = None
+        self._packet_loss_detector: Any | None = None
 
     # ------------------------------------------------------------------
     # 起動・停止
@@ -224,6 +229,32 @@ class AgentOrchestrator:
         )
         logger.info("EventCorrelator / IncidentCoordinator を初期化しました。")
 
+        if self._packet_loss_poll_interval > 0 and self._toolkits:
+            from agentic_ni.distributed.packet_loss_detector import (
+                PacketLossDetector,
+                build_link_pairs,
+            )
+            link_pairs = build_link_pairs(data)
+            run_show_fns = {
+                agent_id.removeprefix("Agent-"): toolkit.run_show_direct
+                for agent_id, toolkit in self._toolkits.items()
+                if hasattr(toolkit, "run_show_direct")
+            }
+            if link_pairs and run_show_fns:
+                self._packet_loss_detector = PacketLossDetector(
+                    links=link_pairs,
+                    run_show_fns=run_show_fns,
+                    bus=self._bus,
+                    poll_interval=self._packet_loss_poll_interval,
+                    loss_threshold=self._loss_threshold,
+                )
+                await self._packet_loss_detector.start()
+                logger.info(
+                    "PacketLossDetector を起動しました: %d リンク, interval=%.0fs",
+                    len(link_pairs),
+                    self._packet_loss_poll_interval,
+                )
+
     async def _start_agent(
         self, node_info: NodeInfo, neighbors: list[NeighborInfo]
     ) -> DeviceAgent:
@@ -269,6 +300,9 @@ class AgentOrchestrator:
 
     async def stop_all(self) -> None:
         """Correlator をフラッシュして全 DeviceAgent を停止する。"""
+        if self._packet_loss_detector is not None:
+            await self._packet_loss_detector.stop()
+            self._packet_loss_detector = None
         if self._correlator is not None:
             await self._correlator.flush_all()
         for agent in list(self._agents.values()):
