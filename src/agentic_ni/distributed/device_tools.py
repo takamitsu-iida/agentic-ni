@@ -131,6 +131,30 @@ class DeviceToolkit:
         result = run_show_command(self._testbed_yaml, self._device_name, command)
         return result.get("raw_output", json.dumps(result, ensure_ascii=False))
 
+    def capture_baseline_direct(self) -> "DesiredState":
+        """1 回の pyATS セッションで全ベースライン show を実行して DesiredState を返す。
+
+        run_show_direct を 3 回呼ぶと接続を 3 回確立してタイムアウトしやすいため、
+        このメソッドでは接続 1 回で全コマンドを実行する。
+        """
+        _assert_testbed(self._testbed_yaml, self._device_name)
+        from agentic_ni.tools.pyats_tools import _load_testbed, _connect_device
+
+        testbed = _load_testbed(self._testbed_yaml)
+        device = _connect_device(testbed, self._device_name)
+
+        def _run(command: str) -> str:
+            try:
+                output = device.parse(command)
+                return output.get("raw_output", json.dumps(output, ensure_ascii=False))
+            except Exception:
+                return device.execute(command)
+
+        try:
+            return capture_desired_state(_run)
+        finally:
+            device.disconnect()
+
     # ------------------------------------------------------------------
     # Read-Only ツール生成
     # ------------------------------------------------------------------

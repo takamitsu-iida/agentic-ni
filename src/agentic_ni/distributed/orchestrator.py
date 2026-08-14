@@ -351,7 +351,7 @@ class AgentOrchestrator:
         return len(self._agents)
 
     async def capture_all_baselines(
-        self, timeout: float = 15.0, interval: float = 1.0
+        self, timeout: float = 60.0, interval: float = 1.0
     ) -> dict[str, str]:
         """全エージェントの DesiredState を show コマンドから自動生成する。
 
@@ -372,10 +372,16 @@ class AgentOrchestrator:
             if agent is None:
                 return agent_id, "skipped"
             try:
-                desired = await asyncio.wait_for(
-                    asyncio.to_thread(capture_desired_state, toolkit.run_show_direct),
-                    timeout=timeout,
-                )
+                if hasattr(toolkit, "capture_baseline_direct"):
+                    desired = await asyncio.wait_for(
+                        asyncio.to_thread(toolkit.capture_baseline_direct),
+                        timeout=timeout,
+                    )
+                else:
+                    desired = await asyncio.wait_for(
+                        asyncio.to_thread(capture_desired_state, toolkit.run_show_direct),
+                        timeout=timeout,
+                    )
                 agent._memory.desired_state = desired
                 n_intf = len(desired.interfaces)
                 n_nb = len(desired.routing_neighbors)

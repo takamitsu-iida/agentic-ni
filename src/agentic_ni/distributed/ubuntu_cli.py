@@ -117,7 +117,7 @@ def _print_rag_status() -> None:
         stats = {"available": False, "total_chunks": 0, "source_files": []}
 
     if not stats["available"]:
-        print(f"  RAG               : {_c(_DIM, '無効 (chromadb 未インストール  uv sync --extra rag)')}")
+        print(f"  RAG               : {_c(_DIM, '無効 (chromadb インポートエラー)')}")
         return
 
     chunks: int = stats["total_chunks"]
@@ -170,7 +170,7 @@ async def _capture_and_print_baselines(orchestrator: AgentOrchestrator) -> None:
     """全装置から DesiredState を自動取得して結果を表示する。"""
     print(f"{_c(_BOLD, '  ── DesiredState 自動取得（正常状態スナップショット）──')}")
     print(_c(_DIM, "  show ip interface brief / ospf neighbor / bgp summary を実行中..."))
-    results = await orchestrator.capture_all_baselines(timeout=15.0)
+    results = await orchestrator.capture_all_baselines(timeout=60.0)
     if not results:
         print(_c(_DIM, "  （ツール設定なし、スキップ）"))
         print()
