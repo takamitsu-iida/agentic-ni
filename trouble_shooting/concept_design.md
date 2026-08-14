@@ -227,5 +227,4 @@ src/agentic_ni/distributed/
   reporter.py           # ConversationRecorder / generate_report()
   prompts.py            # DeviceAgent 用プロンプトビルダー
   watch_cli.py          # agentic-ni-watch CLI
-  demo_runner.py        # デモ用スクリプト
 ```
