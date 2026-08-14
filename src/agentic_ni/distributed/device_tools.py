@@ -112,18 +112,36 @@ class DeviceToolkit:
             return False, f"{ip}:{port} 到達不可 ({type(exc).__name__})"
 
     def _get_management_ip(self) -> tuple[str, int]:
-        """testbed.yaml から最初の接続先 IP とポートを返す。"""
+        """testbed.yaml から接続先 IP とポートを返す。
+
+        ループバック系の接続名（loopback / lo / lb など）を優先し、
+        該当がなければ先頭の接続を返す。
+        """
         if not self._testbed_yaml:
             return "", 22
         import yaml as _yaml
         data = _yaml.safe_load(self._testbed_yaml)
         device_data = data.get("devices", {}).get(self._device_name, {})
-        for conn in device_data.get("connections", {}).values():
+        connections = device_data.get("connections", {})
+
+        loopback_result: tuple[str, int] | None = None
+        fallback_result: tuple[str, int] | None = None
+        for name, conn in connections.items():
             ip = conn.get("ip", "")
             port = conn.get("port", 22)
-            if ip:
-                return str(ip), int(port)
-        return "", 22
+            if not ip:
+                continue
+            entry = (str(ip), int(port))
+            name_lower = name.lower()
+            # ループバック系の接続名を優先
+            if loopback_result is None and (
+                "loopback" in name_lower or name_lower in {"lo", "lo0", "lb", "lb0"}
+            ):
+                loopback_result = entry
+            elif fallback_result is None:
+                fallback_result = entry
+
+        return loopback_result or fallback_result or ("", 22)
 
     def run_show_direct(self, command: str) -> str:
         """show コマンドを直接実行してテキスト出力を返す（LangChain ツールラッパーなし）。"""
