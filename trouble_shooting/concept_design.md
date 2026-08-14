@@ -150,7 +150,19 @@ topology.yaml を解析して全 DeviceAgent・IncidentCoordinator・EventCorrel
 | `MessageDeduplicator` | `message_id` 単位でバスメッセージの二重配信を防ぐ |
 | `SyslogDeduplicator` | syslog テキストをフィンガープリント化して重複を抑制 |
 
-### ⑨ ConversationRecorder / Reporter（`reporter.py`）
+### ⑨ RAG（知識ベース）
+
+`tools/rag_tools.py` の `search_knowledge()` を使い、`rag/` ディレクトリ内の知識ファイルを ChromaDB で索引化して検索する。
+
+| 組み込み箇所 | クエリ | 効果 |
+|---|---|---|
+| `DeviceAgent._build_query_messages()` | `DeviceQueryRequest.symptom_summary` | show コマンド調査前にプロトコル固有の知識（OSPF/BGP ガイド等）を LLM へ注入 |
+| `IncidentCoordinator._analyze()` | `NetworkIncident.syslog_events`（先頭5件） | RCA 分析前に関連するトラブルシューティング手順を LLM へ注入 |
+
+- chromadb が未インストール、またはインデックスが空の場合は何もせず通常処理を継続（エラーにならない）。
+- インデックス構築: `agentic-ni --rag-index` または `rag_tools.index_knowledge_files()` を実行する。
+
+### ⑩ ConversationRecorder / Reporter（`reporter.py`）
 
 `ConversationRecorder` が `network/agents/#` を購読してメッセージを時系列記録し、`generate_report()` で `reports/` ディレクトリに Markdown レポートを出力する。
 

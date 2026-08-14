@@ -600,6 +600,17 @@ class DeviceAgent:
             "正常状態の定義（ベースライン）と現在の状態を比較し、"
             "差異を優先的に調査して TO: COORDINATOR | MSG: ... 形式で報告してください。"
         )
+        try:
+            from agentic_ni.tools import rag_tools
+            knowledge = rag_tools.search_knowledge(request.symptom_summary, k=3)
+            if knowledge:
+                knowledge_text = "\n\n".join(
+                    f"**{k['source_file']}** （関連度: {1.0 - k['distance']:.0%}）\n```\n{k['content']}\n```"
+                    for k in knowledge
+                )
+                user_content += f"\n\n## 参考資料（知識ベース）\n{knowledge_text}"
+        except Exception:  # noqa: BLE001
+            pass
         return [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_content),

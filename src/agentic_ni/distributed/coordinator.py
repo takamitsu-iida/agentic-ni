@@ -232,6 +232,18 @@ class IncidentCoordinator:
             f"## インシデント情報\n{symptom_summary}\n\n"
             f"## 各装置の調査結果\n{findings_text}"
         )
+        try:
+            from agentic_ni.tools import rag_tools
+            rca_query = " ".join(incident.syslog_events[:5])
+            knowledge = rag_tools.search_knowledge(rca_query, k=3)
+            if knowledge:
+                knowledge_text = "\n\n".join(
+                    f"**{k['source_file']}** （関連度: {1.0 - k['distance']:.0%}）\n```\n{k['content']}\n```"
+                    for k in knowledge
+                )
+                user_content += f"\n\n## 参考資料（知識ベース）\n{knowledge_text}"
+        except Exception:  # noqa: BLE001
+            pass
 
         messages = [
             SystemMessage(content=_RCA_SYSTEM_PROMPT),
