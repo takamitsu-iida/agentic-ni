@@ -441,6 +441,7 @@ nodes:
       - "serial:6000"
     x: -300
     y: 200
+    hide_links: true
     interfaces:
       - id: "i0"
         label: "ens2"
@@ -589,6 +590,7 @@ nodes:
     x: -150
     y: 350
     configuration: "bridge0"
+    hide_links: true
     interfaces:
       - id: "i0"
         label: "port"
@@ -603,6 +605,7 @@ nodes:
     x: -450
     y: 350
     configuration: "bridge1"
+    hide_links: true
     interfaces:
       - id: "i0"
         label: "port"
